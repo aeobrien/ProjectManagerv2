@@ -258,7 +258,7 @@ struct DeferredBadge: View {
 
 // MARK: - String Helper
 
-extension String {
+public extension String {
     /// Converts "camelCase" to "Camel Case"
     var camelCaseToWords: String {
         unicodeScalars.reduce("") { result, scalar in
