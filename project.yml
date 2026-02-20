@@ -1,0 +1,62 @@
+name: ProjectManager
+options:
+  bundleIdPrefix: com.projectmanager
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  xcodeVersion: "16.3"
+  generateEmptyDirectories: true
+
+packages:
+  PMUtilities:
+    path: Packages/PMUtilities
+  PMDomain:
+    path: Packages/PMDomain
+  PMData:
+    path: Packages/PMData
+  PMDesignSystem:
+    path: Packages/PMDesignSystem
+  PMServices:
+    path: Packages/PMServices
+  PMFeatures:
+    path: Packages/PMFeatures
+
+targets:
+  ProjectManager:
+    type: application
+    platform: macOS
+    sources:
+      - ProjectManager/Sources
+    dependencies:
+      - package: PMFeatures
+      - package: PMServices
+      - package: PMDesignSystem
+      - package: PMData
+      - package: PMDomain
+      - package: PMUtilities
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app
+        PRODUCT_NAME: ProjectManager
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
+    scheme:
+      testTargets:
+        - ProjectManagerTests
+      gatherCoverageData: true
+
+  ProjectManagerTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - ProjectManagerTests
+    dependencies:
+      - target: ProjectManager
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.tests
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
