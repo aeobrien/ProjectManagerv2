@@ -5,10 +5,12 @@ import PMDesignSystem
 /// Tabbed view showing a project's full detail: overview, roadmap, documents, history.
 public struct ProjectDetailView: View {
     @Bindable var viewModel: ProjectDetailViewModel
+    var roadmapViewModel: ProjectRoadmapViewModel?
     @State private var selectedTab: DetailTab = .roadmap
 
-    public init(viewModel: ProjectDetailViewModel) {
+    public init(viewModel: ProjectDetailViewModel, roadmapViewModel: ProjectRoadmapViewModel? = nil) {
         self.viewModel = viewModel
+        self.roadmapViewModel = roadmapViewModel
     }
 
     public var body: some View {
@@ -83,6 +85,12 @@ public struct ProjectDetailView: View {
             switch selectedTab {
             case .roadmap:
                 RoadmapView(viewModel: viewModel)
+            case .timeline:
+                if let roadmapVM = roadmapViewModel {
+                    ProjectRoadmapView(viewModel: roadmapVM)
+                } else {
+                    PMEmptyState(icon: "map", title: "Timeline", message: "Timeline view not available.")
+                }
             case .overview:
                 OverviewTabView(viewModel: viewModel)
             }
@@ -92,6 +100,7 @@ public struct ProjectDetailView: View {
 
 enum DetailTab: String, CaseIterable {
     case roadmap = "Roadmap"
+    case timeline = "Timeline"
     case overview = "Overview"
 }
 
