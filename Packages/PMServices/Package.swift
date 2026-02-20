@@ -13,12 +13,18 @@ let package = Package(
     dependencies: [
         .package(path: "../PMData"),
         .package(path: "../PMDomain"),
-        .package(path: "../PMUtilities")
+        .package(path: "../PMUtilities"),
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.15.0")
     ],
     targets: [
         .target(
             name: "PMServices",
-            dependencies: ["PMData", "PMDomain", "PMUtilities"],
+            dependencies: [
+                "PMData",
+                "PMDomain",
+                "PMUtilities",
+                .product(name: "WhisperKit", package: "WhisperKit")
+            ],
             path: "Sources/PMServices"
         ),
         .testTarget(
