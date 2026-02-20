@@ -1,17 +1,6 @@
 import Foundation
 import PMDomain
 
-/// Conversation types that the AI supports.
-public enum ConversationType: String, Sendable, Codable {
-    case checkInQuickLog
-    case checkInFull
-    case onboarding
-    case review
-    case retrospective
-    case reEntry
-    case general
-}
-
 /// Prompt templates for each conversation type with behavioural contract.
 public enum PromptTemplates {
 
@@ -187,12 +176,12 @@ public enum PromptTemplates {
     public static func systemPrompt(for type: ConversationType, projectName: String? = nil) -> String {
         switch type {
         case .checkInQuickLog: checkInQuickLog(projectName: projectName ?? "Unknown")
-        case .checkInFull: checkInFull(projectName: projectName ?? "Unknown")
+        case .checkInFull, .checkIn: checkInFull(projectName: projectName ?? "Unknown")
         case .onboarding: onboarding()
         case .review: review(projectName: projectName ?? "Unknown")
         case .retrospective: retrospective(projectName: projectName ?? "Unknown")
         case .reEntry: reEntry(projectName: projectName ?? "Unknown")
-        case .general: general()
+        case .brainDump, .planning, .general: general()
         }
     }
 }
