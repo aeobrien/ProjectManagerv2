@@ -1,10 +1,13 @@
 import SwiftUI
 import PMDomain
 import PMDesignSystem
+import PMServices
 
 /// Lightweight quick capture sheet for creating Idea-state project stubs.
 public struct QuickCaptureView: View {
     @Bindable var viewModel: QuickCaptureViewModel
+    @State private var voiceManager = VoiceInputManager()
+    @State private var showVoiceInput = false
     @Environment(\.dismiss) private var dismiss
 
     public init(viewModel: QuickCaptureViewModel) {
@@ -29,12 +32,32 @@ public struct QuickCaptureView: View {
                 .buttonStyle(.plain)
             }
 
-            // Transcript input
-            VStack(alignment: .leading, spacing: 4) {
+            // Input mode toggle
+            HStack {
                 Text("What's the idea?")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showVoiceInput.toggle()
+                    if !showVoiceInput {
+                        voiceManager.cancel()
+                    }
+                } label: {
+                    Image(systemName: showVoiceInput ? "keyboard" : "mic.fill")
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .help(showVoiceInput ? "Switch to text input" : "Switch to voice input")
+            }
 
+            // Input area
+            if showVoiceInput {
+                VoiceInputView(manager: voiceManager) { transcript in
+                    viewModel.transcript = transcript
+                    showVoiceInput = false
+                }
+            } else {
                 TextEditor(text: $viewModel.transcript)
                     .font(.body)
                     .frame(minHeight: 80)
@@ -94,6 +117,7 @@ public struct QuickCaptureView: View {
                 if viewModel.didSave {
                     Button("Capture Another") {
                         viewModel.reset()
+                        voiceManager.reset()
                     }
                     .buttonStyle(.bordered)
 
