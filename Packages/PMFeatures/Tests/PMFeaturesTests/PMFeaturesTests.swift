@@ -3,6 +3,10 @@ import Foundation
 @testable import PMFeatures
 @testable import PMDomain
 
+// MARK: - Shared Error
+
+enum MockError: Error { case mock }
+
 // MARK: - Mock Repositories
 
 final class MockProjectRepository: ProjectRepositoryProtocol, @unchecked Sendable {
@@ -40,8 +44,12 @@ final class MockProjectRepository: ProjectRepositoryProtocol, @unchecked Sendabl
 
 final class MockCategoryRepository: CategoryRepositoryProtocol, @unchecked Sendable {
     var categories: [PMDomain.Category] = []
+    var shouldThrow = false
 
-    func fetchAll() async throws -> [PMDomain.Category] { categories }
+    func fetchAll() async throws -> [PMDomain.Category] {
+        if shouldThrow { throw MockError.mock }
+        return categories
+    }
     func fetch(id: UUID) async throws -> PMDomain.Category? { categories.first { $0.id == id } }
     func save(_ category: PMDomain.Category) async throws {
         if let idx = categories.firstIndex(where: { $0.id == category.id }) {

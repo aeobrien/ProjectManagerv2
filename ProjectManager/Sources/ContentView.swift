@@ -7,6 +7,7 @@ import PMDomain
 struct ContentView: View {
     @State private var dbManager: DatabaseManager?
     @State private var projectBrowserVM: ProjectBrowserViewModel?
+    @State private var settingsManager = SettingsManager()
     @State private var initError: String?
 
     var body: some View {
@@ -27,11 +28,7 @@ struct ContentView: View {
                         message: "Coming in Phase 10"
                     )
                 } settings: {
-                    PlaceholderView(
-                        title: "Settings",
-                        iconName: "gear",
-                        message: "Coming in Phase 9"
-                    )
+                    SettingsView(settings: settingsManager)
                 }
             } else if let initError {
                 VStack(spacing: 12) {
