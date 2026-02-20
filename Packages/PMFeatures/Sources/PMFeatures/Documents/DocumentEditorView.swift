@@ -31,6 +31,7 @@ public struct DocumentEditorView: View {
                     }
                 }
             } else {
+                #if os(macOS)
                 HSplitView {
                     documentList
                         .frame(minWidth: 200, maxWidth: 250)
@@ -45,6 +46,13 @@ public struct DocumentEditorView: View {
                         )
                     }
                 }
+                #else
+                if viewModel.selectedDocument != nil {
+                    editorPane
+                } else {
+                    documentList
+                }
+                #endif
             }
         }
         .task { await viewModel.load() }
