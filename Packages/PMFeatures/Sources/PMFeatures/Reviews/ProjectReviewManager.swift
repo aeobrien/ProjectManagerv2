@@ -228,7 +228,7 @@ public final class ProjectReviewManager {
             }
 
             let history = messages.map { LLMMessage(role: $0.role == "user" ? .user : .assistant, content: $0.content) }
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: .review,
                 projectContext: projectContext,
                 conversationHistory: history
@@ -259,7 +259,7 @@ public final class ProjectReviewManager {
 
         do {
             let history = messages.map { LLMMessage(role: $0.role == "user" ? .user : .assistant, content: $0.content) }
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: .review,
                 projectContext: nil,
                 conversationHistory: history

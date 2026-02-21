@@ -1,13 +1,18 @@
 import SwiftUI
 import PMData
+import PMServices
 import PMDesignSystem
 
 /// Full settings panel backed by SettingsManager.
 public struct SettingsView: View {
     @Bindable var settings: SettingsManager
+    var exportService: ExportService?
+    @State private var exportStatus: ExportStatus?
+    @State private var isExporting = false
 
-    public init(settings: SettingsManager) {
+    public init(settings: SettingsManager, exportService: ExportService? = nil) {
         self.settings = settings
+        self.exportService = exportService
     }
 
     public var body: some View {
@@ -20,6 +25,7 @@ public struct SettingsView: View {
                 doneColumnSection
                 voiceSection
                 aiSection
+                exportSection
                 syncSection
                 integrationSection
             }
@@ -160,6 +166,65 @@ public struct SettingsView: View {
                     Text("Confirm All").tag("confirmAll")
                     Text("Confirm Destructive").tag("confirmDestructive")
                     Text("Auto").tag("auto")
+                }
+            }
+        }
+    }
+
+    // MARK: - Export
+
+    private var exportSection: some View {
+        PMCard {
+            VStack(alignment: .leading, spacing: 12) {
+                PMSectionHeader("Data Export", subtitle: "Export project data for external tools")
+
+                if let exportService {
+                    HStack {
+                        Button {
+                            Task {
+                                isExporting = true
+                                let payload = ExportPayload(projects: [], tasks: [])
+                                let _ = await exportService.export(payload: payload)
+                                exportStatus = await exportService.currentStatus()
+                                isExporting = false
+                            }
+                        } label: {
+                            if isExporting {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label("Export Now", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                        .disabled(isExporting)
+
+                        Spacer()
+
+                        if let status = exportStatus {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                if let result = status.lastResult {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                            .foregroundStyle(result == .success ? .green : .red)
+                                        Text(result == .success ? "Success" : result.rawValue)
+                                            .font(.caption)
+                                    }
+                                }
+                                if let date = status.lastExportDate {
+                                    Text(date, style: .relative)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("\(status.exportCount) total exports")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } else {
+                    Text("Export service not configured")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

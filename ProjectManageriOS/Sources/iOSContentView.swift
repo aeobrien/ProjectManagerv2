@@ -113,6 +113,7 @@ struct iOSContentView: View {
             let checkInRepo = SQLiteCheckInRepository(db: db.dbQueue)
             let dependencyRepo = SQLiteDependencyRepository(db: db.dbQueue)
             let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
+            let conversationRepo = SQLiteConversationRepository(db: db.dbQueue)
 
             self.projectRepo = projectRepo
             self.phaseRepo = phaseRepo
@@ -152,7 +153,8 @@ struct iOSContentView: View {
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo,
-                checkInRepo: checkInRepo
+                checkInRepo: checkInRepo,
+                conversationRepo: conversationRepo
             )
 
             self.quickCaptureVM = QuickCaptureViewModel(

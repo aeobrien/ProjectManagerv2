@@ -48,8 +48,12 @@ public struct ContextAssembler: Sendable {
     /// Maximum token budget for context.
     public let maxTokenBudget: Int
 
-    public init(maxTokenBudget: Int = 8000) {
+    /// Optional knowledge base for RAG-style context retrieval.
+    public let knowledgeBase: KnowledgeBaseManager?
+
+    public init(maxTokenBudget: Int = 8000, knowledgeBase: KnowledgeBaseManager? = nil) {
         self.maxTokenBudget = maxTokenBudget
+        self.knowledgeBase = knowledgeBase
     }
 
     /// Estimate token count for a string.
@@ -62,7 +66,7 @@ public struct ContextAssembler: Sendable {
         conversationType: ConversationType,
         projectContext: ProjectContext?,
         conversationHistory: [LLMMessage] = []
-    ) throws -> ContextPayload {
+    ) async throws -> ContextPayload {
         let systemPrompt = PromptTemplates.systemPrompt(
             for: conversationType,
             projectName: projectContext?.project.name
@@ -73,6 +77,18 @@ public struct ContextAssembler: Sendable {
         // Add project context if available
         if let ctx = projectContext {
             contextSections.append(formatProjectContext(ctx))
+
+            // Retrieve relevant knowledge base context if available
+            if let knowledgeBase, let lastUserMessage = conversationHistory.last(where: { $0.role == .user }) {
+                let kbContext = try await knowledgeBase.retrieveContext(
+                    query: lastUserMessage.content,
+                    projectId: ctx.project.id,
+                    maxChars: 1500
+                )
+                if !kbContext.isEmpty {
+                    contextSections.append(kbContext)
+                }
+            }
         }
 
         // Build messages list

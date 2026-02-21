@@ -5,6 +5,7 @@ import PMDesignSystem
 /// Document editor with split pane: edit on left, markdown preview on right.
 public struct DocumentEditorView: View {
     @Bindable var viewModel: DocumentViewModel
+    @State private var showMarkdownPreview = false
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -147,6 +148,12 @@ public struct DocumentEditorView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Toggle(isOn: $showMarkdownPreview) {
+                    Image(systemName: showMarkdownPreview ? "eye.fill" : "eye")
+                }
+                .toggleStyle(.button)
+                .help("Toggle Markdown Preview")
+
                 Button("Save") {
                     Task { await viewModel.save() }
                 }
@@ -158,14 +165,20 @@ public struct DocumentEditorView: View {
 
             Divider()
 
-            // Content editor
-            TextEditor(text: $viewModel.editingContent)
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .onChange(of: viewModel.editingContent) {
-                    viewModel.markEdited()
+            // Content editor with optional markdown preview
+            if showMarkdownPreview {
+                #if os(macOS)
+                HSplitView {
+                    editorTextArea
+                    Divider()
+                    markdownPreview
                 }
+                #else
+                markdownPreview
+                #endif
+            } else {
+                editorTextArea
+            }
 
             if let error = viewModel.error {
                 Text(error)
@@ -174,6 +187,37 @@ public struct DocumentEditorView: View {
                     .padding(.horizontal)
             }
         }
+    }
+
+    // MARK: - Editor Text Area
+
+    private var editorTextArea: some View {
+        TextEditor(text: $viewModel.editingContent)
+            .font(.system(.body, design: .monospaced))
+            .scrollContentBackground(.hidden)
+            .padding(8)
+            .onChange(of: viewModel.editingContent) {
+                viewModel.markEdited()
+            }
+    }
+
+    // MARK: - Markdown Preview
+
+    private var markdownPreview: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(LocalizedStringKey(viewModel.editingContent))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(macOS)
+        .background(Color(nsColor: .controlBackgroundColor))
+        #else
+        .background(Color(.secondarySystemBackground))
+        #endif
     }
 
     // MARK: - Helpers

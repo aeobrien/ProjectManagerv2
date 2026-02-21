@@ -195,9 +195,9 @@ struct ContextAssemblerTests {
     }
 
     @Test("Assemble without project context")
-    func assembleNoContext() throws {
+    func assembleNoContext() async throws {
         let assembler = ContextAssembler()
-        let payload = try assembler.assemble(
+        let payload = try await assembler.assemble(
             conversationType: .general,
             projectContext: nil,
             conversationHistory: [LLMMessage(role: .user, content: "Hi")]
@@ -207,11 +207,11 @@ struct ContextAssemblerTests {
     }
 
     @Test("Assemble with project context")
-    func assembleWithContext() throws {
+    func assembleWithContext() async throws {
         let assembler = ContextAssembler()
         let project = Project(name: "Test Project", categoryId: UUID())
         let ctx = ProjectContext(project: project)
-        let payload = try assembler.assemble(
+        let payload = try await assembler.assemble(
             conversationType: .checkInQuickLog,
             projectContext: ctx,
             conversationHistory: []
@@ -220,7 +220,7 @@ struct ContextAssemblerTests {
     }
 
     @Test("History truncation respects token budget")
-    func historyTruncation() throws {
+    func historyTruncation() async throws {
         // Budget large enough for system prompt but not all history
         let assembler = ContextAssembler(maxTokenBudget: 3000)
         let longMessage = String(repeating: "word ", count: 2000)
@@ -229,7 +229,7 @@ struct ContextAssemblerTests {
             LLMMessage(role: .assistant, content: longMessage),
             LLMMessage(role: .user, content: "Recent message")
         ]
-        let payload = try assembler.assemble(
+        let payload = try await assembler.assemble(
             conversationType: .general,
             projectContext: nil,
             conversationHistory: history
@@ -240,12 +240,12 @@ struct ContextAssemblerTests {
     }
 
     @Test("Project context includes phases")
-    func contextIncludesPhases() throws {
+    func contextIncludesPhases() async throws {
         let assembler = ContextAssembler()
         let project = Project(name: "Test", categoryId: UUID())
         let phase = Phase(projectId: project.id, name: "Design")
         let ctx = ProjectContext(project: project, phases: [phase])
-        let payload = try assembler.assemble(
+        let payload = try await assembler.assemble(
             conversationType: .general,
             projectContext: ctx,
             conversationHistory: []
@@ -254,13 +254,13 @@ struct ContextAssemblerTests {
     }
 
     @Test("Frequently deferred tasks included in context")
-    func deferredInContext() throws {
+    func deferredInContext() async throws {
         let assembler = ContextAssembler()
         let project = Project(name: "Test", categoryId: UUID())
         var task = PMTask(milestoneId: UUID(), name: "Avoided Task")
         task.timesDeferred = 5
         let ctx = ProjectContext(project: project, frequentlyDeferredTasks: [task])
-        let payload = try assembler.assemble(
+        let payload = try await assembler.assemble(
             conversationType: .general,
             projectContext: ctx,
             conversationHistory: []

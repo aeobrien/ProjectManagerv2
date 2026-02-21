@@ -116,7 +116,7 @@ public final class OnboardingFlowManager {
             }
 
             let history = [LLMMessage(role: .user, content: fullText)]
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: .onboarding,
                 projectContext: nil,
                 conversationHistory: history

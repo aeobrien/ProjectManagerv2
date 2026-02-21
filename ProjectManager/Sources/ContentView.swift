@@ -4,6 +4,7 @@ import PMFeatures
 import PMServices
 import PMData
 import PMDomain
+import UserNotifications
 
 struct ContentView: View {
     @State private var dbManager: DatabaseManager?
@@ -13,9 +14,11 @@ struct ContentView: View {
     @State private var quickCaptureVM: QuickCaptureViewModel?
     @State private var crossProjectRoadmapVM: CrossProjectRoadmapViewModel?
     @State private var settingsManager = SettingsManager()
+    @State private var notificationManager: NotificationManager?
     @State private var initError: String?
     @State private var focusBoardNavPath = NavigationPath()
     @State private var browserNavPath = NavigationPath()
+    @State private var showQuickCaptureSheet = false
 
     // Repositories stored for creating detail VMs on demand
     @State private var projectRepo: SQLiteProjectRepository?
@@ -27,6 +30,7 @@ struct ContentView: View {
     @State private var dependencyRepo: SQLiteDependencyRepository?
     @State private var documentRepo: SQLiteDocumentRepository?
     @State private var checkInRepo: SQLiteCheckInRepository?
+    @State private var conversationRepo: SQLiteConversationRepository?
 
     var body: some View {
         Group {
@@ -73,6 +77,15 @@ struct ContentView: View {
                 ProgressView("Loading...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .sheet(isPresented: $showQuickCaptureSheet) {
+            if let quickCaptureVM {
+                QuickCaptureView(viewModel: quickCaptureVM)
+                    .frame(minWidth: 400, minHeight: 300)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickCaptureShortcut)) { _ in
+            showQuickCaptureSheet = true
         }
         .task {
             await initialize()
@@ -126,6 +139,7 @@ struct ContentView: View {
             let checkInRepo = SQLiteCheckInRepository(db: db.dbQueue)
             let dependencyRepo = SQLiteDependencyRepository(db: db.dbQueue)
             let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
+            let conversationRepo = SQLiteConversationRepository(db: db.dbQueue)
 
             self.projectRepo = projectRepo
             self.categoryRepo = categoryRepo
@@ -136,6 +150,7 @@ struct ContentView: View {
             self.checkInRepo = checkInRepo
             self.dependencyRepo = dependencyRepo
             self.documentRepo = documentRepo
+            self.conversationRepo = conversationRepo
 
             self.projectBrowserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,
@@ -167,7 +182,8 @@ struct ContentView: View {
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo,
-                checkInRepo: checkInRepo
+                checkInRepo: checkInRepo,
+                conversationRepo: conversationRepo
             )
 
             self.quickCaptureVM = QuickCaptureViewModel(
@@ -180,6 +196,26 @@ struct ContentView: View {
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo
             )
+
+            // Initialize notification manager
+            let delivery = UNNotificationDelivery()
+            let maxDaily = settingsManager.maxDailyNotifications
+            let quietStart = settingsManager.quietHoursStart
+            let quietEnd = settingsManager.quietHoursEnd
+            let notifManager = NotificationManager(
+                delivery: delivery,
+                preferences: {
+                    NotificationPreferences(
+                        maxDailyCount: maxDaily,
+                        quietHoursStart: quietStart,
+                        quietHoursEnd: quietEnd
+                    )
+                }
+            )
+            self.notificationManager = notifManager
+
+            // Request notification authorization
+            _ = try? await notifManager.requestAuthorization()
 
             Log.ui.info("Database initialized at \(dbPath)")
         } catch {

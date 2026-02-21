@@ -11,5 +11,17 @@ struct ProjectManagerApp: App {
         WindowGroup {
             ContentView()
         }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Quick Capture") {
+                    NotificationCenter.default.post(name: .quickCaptureShortcut, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+        }
     }
+}
+
+extension Notification.Name {
+    static let quickCaptureShortcut = Notification.Name("quickCaptureShortcut")
 }

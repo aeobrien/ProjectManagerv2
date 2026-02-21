@@ -133,7 +133,7 @@ public final class CheckInFlowManager {
 
             // Assemble context
             let history = [LLMMessage(role: .user, content: userMessage)]
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: conversationType,
                 projectContext: context,
                 conversationHistory: history

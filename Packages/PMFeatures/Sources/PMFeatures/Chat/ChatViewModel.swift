@@ -53,6 +53,11 @@ public final class ChatViewModel {
     private let milestoneRepo: MilestoneRepositoryProtocol
     private let taskRepo: TaskRepositoryProtocol
     private let checkInRepo: CheckInRepositoryProtocol
+    private let conversationRepo: ConversationRepositoryProtocol?
+
+    /// The currently active conversation for persistence.
+    public private(set) var activeConversation: Conversation?
+    public private(set) var savedConversations: [Conversation] = []
 
     // MARK: - Init
 
@@ -64,6 +69,7 @@ public final class ChatViewModel {
         milestoneRepo: MilestoneRepositoryProtocol,
         taskRepo: TaskRepositoryProtocol,
         checkInRepo: CheckInRepositoryProtocol,
+        conversationRepo: ConversationRepositoryProtocol? = nil,
         contextAssembler: ContextAssembler = ContextAssembler()
     ) {
         self.llmClient = llmClient
@@ -75,6 +81,7 @@ public final class ChatViewModel {
         self.milestoneRepo = milestoneRepo
         self.taskRepo = taskRepo
         self.checkInRepo = checkInRepo
+        self.conversationRepo = conversationRepo
     }
 
     // MARK: - Loading
@@ -96,6 +103,7 @@ public final class ChatViewModel {
 
         let userMessage = ChatMessage(role: .user, content: text)
         messages.append(userMessage)
+        await persistMessage(userMessage)
         inputText = ""
         isLoading = true
         error = nil
@@ -104,7 +112,7 @@ public final class ChatViewModel {
             // Build context
             let projectContext = try await buildProjectContext()
             let history = messages.map { LLMMessage(role: $0.role, content: $0.content) }
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: conversationType,
                 projectContext: projectContext,
                 conversationHistory: history
@@ -124,6 +132,7 @@ public final class ChatViewModel {
                 actions: parsed.actions
             )
             messages.append(assistantMessage)
+            await persistMessage(assistantMessage)
 
             // If there are actions, create confirmation
             if !parsed.actions.isEmpty {
@@ -178,6 +187,73 @@ public final class ChatViewModel {
         messages = []
         pendingConfirmation = nil
         error = nil
+        activeConversation = nil
+    }
+
+    // MARK: - Conversation Persistence
+
+    /// Load saved conversations for the selected project.
+    public func loadConversations() async {
+        guard let conversationRepo else { return }
+        do {
+            if let projectId = selectedProjectId {
+                savedConversations = try await conversationRepo.fetchAll(forProject: projectId)
+            } else {
+                savedConversations = try await conversationRepo.fetchAll(ofType: .general)
+            }
+        } catch {
+            Log.ai.error("Failed to load conversations: \(error)")
+        }
+    }
+
+    /// Resume a previously saved conversation.
+    public func resumeConversation(_ conversation: Conversation) {
+        activeConversation = conversation
+        messages = conversation.messages.map { msg in
+            ChatMessage(
+                id: msg.id,
+                role: msg.role == .user ? .user : .assistant,
+                content: msg.content,
+                timestamp: msg.timestamp
+            )
+        }
+        conversationType = conversation.conversationType
+    }
+
+    /// Convert a display ChatMessage to a domain ChatMessage for persistence.
+    private func toDomainMessage(_ message: ChatMessage) -> PMDomain.ChatMessage {
+        let role: ChatRole = message.role == .user ? .user : .assistant
+        return PMDomain.ChatMessage(
+            id: message.id,
+            role: role,
+            content: message.content,
+            timestamp: message.timestamp
+        )
+    }
+
+    /// Persist the current message to the active conversation.
+    private func persistMessage(_ message: ChatMessage) async {
+        guard let conversationRepo else { return }
+        guard message.role == .user || message.role == .assistant else { return }
+
+        let domainMessage = toDomainMessage(message)
+
+        do {
+            if activeConversation == nil {
+                // Create a new conversation
+                var conversation = Conversation(
+                    projectId: selectedProjectId,
+                    conversationType: conversationType
+                )
+                conversation.messages = [domainMessage]
+                try await conversationRepo.save(conversation)
+                activeConversation = conversation
+            } else {
+                try await conversationRepo.appendMessage(domainMessage, toConversation: activeConversation!.id)
+            }
+        } catch {
+            Log.ai.error("Failed to persist message: \(error)")
+        }
     }
 
     public var selectedProject: Project? {

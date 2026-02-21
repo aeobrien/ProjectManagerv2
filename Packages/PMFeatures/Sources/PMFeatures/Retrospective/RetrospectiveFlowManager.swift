@@ -165,7 +165,7 @@ public final class RetrospectiveFlowManager {
             )
 
             let history = messages.map { LLMMessage(role: $0.role == "user" ? .user : .assistant, content: $0.content) }
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: .retrospective,
                 projectContext: projectContext,
                 conversationHistory: history
@@ -198,7 +198,7 @@ public final class RetrospectiveFlowManager {
 
         do {
             let history = messages.map { LLMMessage(role: $0.role == "user" ? .user : .assistant, content: $0.content) }
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: .retrospective,
                 projectContext: nil,
                 conversationHistory: history
@@ -286,7 +286,7 @@ public final class RetrospectiveFlowManager {
             let userMessage = "I'm returning to this project after \(daysSince) days away. Please give me a return briefing."
             let history = [LLMMessage(role: .user, content: userMessage)]
 
-            let payload = try contextAssembler.assemble(
+            let payload = try await contextAssembler.assemble(
                 conversationType: .reEntry,
                 projectContext: projectContext,
                 conversationHistory: history
