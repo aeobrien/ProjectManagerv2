@@ -1,32 +1,27 @@
 import SwiftUI
 import PMUtilities
 import PMFeatures
+import PMServices
 import PMData
 import PMDomain
 
 struct ContentView: View {
     @State private var dbManager: DatabaseManager?
     @State private var projectBrowserVM: ProjectBrowserViewModel?
+    @State private var focusBoardVM: FocusBoardViewModel?
+    @State private var chatVM: ChatViewModel?
     @State private var settingsManager = SettingsManager()
     @State private var initError: String?
 
     var body: some View {
         Group {
-            if let projectBrowserVM {
+            if let projectBrowserVM, let focusBoardVM, let chatVM {
                 AppNavigationView {
-                    PlaceholderView(
-                        title: "Focus Board",
-                        iconName: "square.grid.2x2",
-                        message: "Coming in Phase 7"
-                    )
+                    FocusBoardView(viewModel: focusBoardVM)
                 } projectBrowser: {
                     ProjectBrowserView(viewModel: projectBrowserVM)
                 } aiChat: {
-                    PlaceholderView(
-                        title: "AI Chat",
-                        iconName: "bubble.left.and.bubble.right",
-                        message: "Coming in Phase 10"
-                    )
+                    ChatView(viewModel: chatVM)
                 } settings: {
                     SettingsView(settings: settingsManager)
                 }
@@ -64,7 +59,45 @@ struct ContentView: View {
 
             let projectRepo = SQLiteProjectRepository(db: db.dbQueue)
             let categoryRepo = SQLiteCategoryRepository(db: db.dbQueue)
-            self.projectBrowserVM = ProjectBrowserViewModel(projectRepo: projectRepo, categoryRepo: categoryRepo)
+            let phaseRepo = SQLitePhaseRepository(db: db.dbQueue)
+            let milestoneRepo = SQLiteMilestoneRepository(db: db.dbQueue)
+            let taskRepo = SQLiteTaskRepository(db: db.dbQueue)
+            let subtaskRepo = SQLiteSubtaskRepository(db: db.dbQueue)
+            let checkInRepo = SQLiteCheckInRepository(db: db.dbQueue)
+
+            self.projectBrowserVM = ProjectBrowserViewModel(
+                projectRepo: projectRepo,
+                categoryRepo: categoryRepo
+            )
+
+            self.focusBoardVM = FocusBoardViewModel(
+                projectRepo: projectRepo,
+                categoryRepo: categoryRepo,
+                taskRepo: taskRepo,
+                milestoneRepo: milestoneRepo,
+                phaseRepo: phaseRepo,
+                checkInRepo: checkInRepo
+            )
+
+            let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
+
+            let actionExecutor = ActionExecutor(
+                taskRepo: taskRepo,
+                milestoneRepo: milestoneRepo,
+                subtaskRepo: subtaskRepo,
+                projectRepo: projectRepo,
+                documentRepo: documentRepo
+            )
+
+            self.chatVM = ChatViewModel(
+                llmClient: LLMClient(),
+                actionExecutor: actionExecutor,
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                checkInRepo: checkInRepo
+            )
 
             Log.ui.info("Database initialized at \(dbPath)")
         } catch {

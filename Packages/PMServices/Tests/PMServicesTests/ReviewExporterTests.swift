@@ -122,8 +122,9 @@ struct ReviewExporterTests {
     @Test("ReviewCritique identity")
     func critiqueIdentity() {
         let id = UUID()
-        let a = ReviewCritique(id: id, reviewerName: "A", concerns: [], suggestions: [], overallAssessment: "OK")
-        let b = ReviewCritique(id: id, reviewerName: "A", concerns: [], suggestions: [], overallAssessment: "OK")
+        let date = Date()
+        let a = ReviewCritique(id: id, reviewerName: "A", concerns: [], suggestions: [], overallAssessment: "OK", receivedAt: date)
+        let b = ReviewCritique(id: id, reviewerName: "A", concerns: [], suggestions: [], overallAssessment: "OK", receivedAt: date)
         #expect(a == b)
         #expect(a.id == id)
     }

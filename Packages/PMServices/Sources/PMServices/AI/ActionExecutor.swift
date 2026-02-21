@@ -38,17 +38,20 @@ public struct ActionExecutor: Sendable {
     private let milestoneRepo: MilestoneRepositoryProtocol
     private let subtaskRepo: SubtaskRepositoryProtocol
     private let projectRepo: ProjectRepositoryProtocol
+    private let documentRepo: DocumentRepositoryProtocol?
 
     public init(
         taskRepo: TaskRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
         subtaskRepo: SubtaskRepositoryProtocol,
-        projectRepo: ProjectRepositoryProtocol
+        projectRepo: ProjectRepositoryProtocol,
+        documentRepo: DocumentRepositoryProtocol? = nil
     ) {
         self.taskRepo = taskRepo
         self.milestoneRepo = milestoneRepo
         self.subtaskRepo = subtaskRepo
         self.projectRepo = projectRepo
+        self.documentRepo = documentRepo
     }
 
     /// Generate a bundled confirmation from parsed actions.
@@ -102,9 +105,13 @@ public struct ActionExecutor: Sendable {
             let subtask = Subtask(taskId: taskId, name: name)
             try await subtaskRepo.save(subtask)
 
-        case .updateDocument:
-            // Document repository not yet implemented — no-op for now
-            break
+        case .updateDocument(let documentId, let content):
+            if let documentRepo, var doc = try await documentRepo.fetch(id: documentId) {
+                doc.content = content
+                doc.version += 1
+                doc.updatedAt = Date()
+                try await documentRepo.save(doc)
+            }
 
         case .incrementDeferred(let taskId):
             if var task = try await taskRepo.fetch(id: taskId) {
@@ -129,9 +136,11 @@ public struct ActionExecutor: Sendable {
             )
             try await taskRepo.save(task)
 
-        case .createDocument:
-            // Document repository not yet implemented — no-op for now
-            break
+        case .createDocument(let projectId, let title, let content):
+            if let documentRepo {
+                let doc = Document(projectId: projectId, type: .other, title: title, content: content)
+                try await documentRepo.save(doc)
+            }
         }
     }
 
