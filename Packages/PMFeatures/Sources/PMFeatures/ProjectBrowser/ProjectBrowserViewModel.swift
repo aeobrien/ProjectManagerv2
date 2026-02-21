@@ -51,12 +51,21 @@ public final class ProjectBrowserViewModel {
 
     private let projectRepo: ProjectRepositoryProtocol
     private let categoryRepo: CategoryRepositoryProtocol
+    private let taskRepo: TaskRepositoryProtocol?
+    private let documentRepo: DocumentRepositoryProtocol?
 
     // MARK: - Init
 
-    public init(projectRepo: ProjectRepositoryProtocol, categoryRepo: CategoryRepositoryProtocol) {
+    public init(
+        projectRepo: ProjectRepositoryProtocol,
+        categoryRepo: CategoryRepositoryProtocol,
+        taskRepo: TaskRepositoryProtocol? = nil,
+        documentRepo: DocumentRepositoryProtocol? = nil
+    ) {
         self.projectRepo = projectRepo
         self.categoryRepo = categoryRepo
+        self.taskRepo = taskRepo
+        self.documentRepo = documentRepo
     }
 
     // MARK: - Loading
@@ -94,11 +103,19 @@ public final class ProjectBrowserViewModel {
             result = result.filter { $0.categoryId == categoryId }
         }
 
-        // Search
+        // Cross-entity search: project names + document content
         if !searchText.isEmpty {
             let query = searchText.lowercased()
-            // First try repository search for broader results, then local filter
-            result = result.filter { $0.name.lowercased().contains(query) }
+            var matchingProjectIds = Set(result.filter { $0.name.lowercased().contains(query) }.map(\.id))
+
+            // Search documents (title + content)
+            if let documentRepo {
+                if let matchingDocs = try? await documentRepo.search(query: query) {
+                    matchingProjectIds.formUnion(matchingDocs.map(\.projectId))
+                }
+            }
+
+            result = result.filter { matchingProjectIds.contains($0.id) }
         }
 
         filteredProjects = result

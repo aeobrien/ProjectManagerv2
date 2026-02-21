@@ -124,7 +124,8 @@ struct iOSContentView: View {
 
             self.projectBrowserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,
-                categoryRepo: categoryRepo
+                categoryRepo: categoryRepo,
+                documentRepo: documentRepo
             )
 
             self.focusBoardVM = FocusBoardViewModel(
