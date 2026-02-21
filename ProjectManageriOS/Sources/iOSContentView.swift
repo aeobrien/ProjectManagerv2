@@ -14,13 +14,32 @@ struct iOSContentView: View {
     @State private var settingsManager = SettingsManager()
     @State private var initError: String?
 
+    // Repositories stored for creating detail VMs on demand
+    @State private var projectRepo: SQLiteProjectRepository?
+    @State private var phaseRepo: SQLitePhaseRepository?
+    @State private var milestoneRepo: SQLiteMilestoneRepository?
+    @State private var taskRepo: SQLiteTaskRepository?
+    @State private var subtaskRepo: SQLiteSubtaskRepository?
+    @State private var dependencyRepo: SQLiteDependencyRepository?
+    @State private var documentRepo: SQLiteDocumentRepository?
+
     var body: some View {
         Group {
             if let projectBrowserVM, let focusBoardVM, let chatVM, let quickCaptureVM {
                 IOSTabNavigationView {
-                    FocusBoardView(viewModel: focusBoardVM)
+                    FocusBoardView(viewModel: focusBoardVM) { project in
+                        // Navigation handled by navigationDestination in IOSTabNavigationView's NavigationStack
+                    }
+                    .navigationDestination(for: Project.self) { project in
+                        makeProjectDetailView(project: project)
+                    }
                 } projects: {
-                    ProjectBrowserView(viewModel: projectBrowserVM)
+                    ProjectBrowserView(viewModel: projectBrowserVM) { project in
+                        // Navigation handled by navigationDestination
+                    }
+                    .navigationDestination(for: Project.self) { project in
+                        makeProjectDetailView(project: project)
+                    }
                 } aiChat: {
                     ChatView(viewModel: chatVM)
                 } quickCapture: {
@@ -47,6 +66,33 @@ struct iOSContentView: View {
         }
     }
 
+    @ViewBuilder
+    private func makeProjectDetailView(project: Project) -> some View {
+        if let projectRepo, let phaseRepo, let milestoneRepo, let taskRepo, let subtaskRepo, let dependencyRepo {
+            let detailVM = ProjectDetailViewModel(
+                project: project,
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                subtaskRepo: subtaskRepo,
+                dependencyRepo: dependencyRepo
+            )
+            let roadmapVM = ProjectRoadmapViewModel(
+                project: project,
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                dependencyRepo: dependencyRepo
+            )
+            let docVM: DocumentViewModel? = documentRepo.map {
+                DocumentViewModel(projectId: project.id, documentRepo: $0)
+            }
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM)
+        }
+    }
+
     private func initialize() async {
         do {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -65,6 +111,16 @@ struct iOSContentView: View {
             let taskRepo = SQLiteTaskRepository(db: db.dbQueue)
             let subtaskRepo = SQLiteSubtaskRepository(db: db.dbQueue)
             let checkInRepo = SQLiteCheckInRepository(db: db.dbQueue)
+            let dependencyRepo = SQLiteDependencyRepository(db: db.dbQueue)
+            let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
+
+            self.projectRepo = projectRepo
+            self.phaseRepo = phaseRepo
+            self.milestoneRepo = milestoneRepo
+            self.taskRepo = taskRepo
+            self.subtaskRepo = subtaskRepo
+            self.dependencyRepo = dependencyRepo
+            self.documentRepo = documentRepo
 
             self.projectBrowserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,
@@ -79,8 +135,6 @@ struct iOSContentView: View {
                 phaseRepo: phaseRepo,
                 checkInRepo: checkInRepo
             )
-
-            let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
 
             let actionExecutor = ActionExecutor(
                 taskRepo: taskRepo,

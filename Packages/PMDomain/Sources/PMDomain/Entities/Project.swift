@@ -1,7 +1,7 @@
 import Foundation
 
 /// A meaningful endeavour with intent, identity, and a desired outcome.
-public struct Project: Identifiable, Equatable, Codable, Sendable {
+public struct Project: Identifiable, Equatable, Hashable, Codable, Sendable {
     public var id: UUID
     public var name: String
     public var categoryId: UUID

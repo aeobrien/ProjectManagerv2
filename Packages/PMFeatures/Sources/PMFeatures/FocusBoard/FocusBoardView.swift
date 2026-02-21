@@ -97,9 +97,11 @@ struct ProjectKanbanSection: View {
                         .fill(SlotColour.forIndex(project.focusSlotIndex))
                         .frame(width: 10, height: 10)
 
-                    Text(project.name)
-                        .font(.headline)
-                        .onTapGesture { onSelectProject?(project) }
+                    NavigationLink(value: project) {
+                        Text(project.name)
+                            .font(.headline)
+                    }
+                    .buttonStyle(.plain)
 
                     Text(viewModel.categoryName(for: project))
                         .font(.caption)
@@ -178,6 +180,12 @@ struct ProjectKanbanSection: View {
         .frame(maxWidth: .infinity, alignment: .top)
         .padding(8)
         .background(column.color.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        .dropDestination(for: String.self) { items, _ in
+            guard let taskIdString = items.first,
+                  let taskId = UUID(uuidString: taskIdString) else { return false }
+            Task { await viewModel.moveTaskById(taskId, to: column) }
+            return true
+        }
     }
 }
 

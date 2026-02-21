@@ -220,6 +220,18 @@ public final class FocusBoardViewModel {
         } catch { self.error = error.localizedDescription }
     }
 
+    /// Move a task identified by UUID to the given kanban column (used by drag-and-drop).
+    public func moveTaskById(_ taskId: UUID, to column: KanbanColumn) async {
+        // Find the task across all projects
+        for project in focusedProjects {
+            let allTasks = toDoTasks(for: project.id) + inProgressTasks(for: project.id) + doneTasks(for: project.id)
+            if let task = allTasks.first(where: { $0.id == taskId }) {
+                await moveTask(task, to: column)
+                return
+            }
+        }
+    }
+
     // MARK: - Health Signal Badges
 
     public func healthBadges(for projectId: UUID) -> [HealthSignalType] {

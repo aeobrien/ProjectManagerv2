@@ -4,27 +4,31 @@ import SwiftUI
 public struct AdaptiveNavigationView<
     FocusBoardContent: View,
     ProjectsContent: View,
-    AIChatContent: View,
     QuickCaptureContent: View,
+    CrossProjectRoadmapContent: View,
+    AIChatContent: View,
     SettingsContent: View
 >: View {
     let focusBoard: () -> FocusBoardContent
     let projects: () -> ProjectsContent
-    let aiChat: () -> AIChatContent
     let quickCapture: () -> QuickCaptureContent
+    let crossProjectRoadmap: () -> CrossProjectRoadmapContent
+    let aiChat: () -> AIChatContent
     let settings: () -> SettingsContent
 
     public init(
         @ViewBuilder focusBoard: @escaping () -> FocusBoardContent,
         @ViewBuilder projects: @escaping () -> ProjectsContent,
-        @ViewBuilder aiChat: @escaping () -> AIChatContent,
         @ViewBuilder quickCapture: @escaping () -> QuickCaptureContent,
+        @ViewBuilder crossProjectRoadmap: @escaping () -> CrossProjectRoadmapContent,
+        @ViewBuilder aiChat: @escaping () -> AIChatContent,
         @ViewBuilder settings: @escaping () -> SettingsContent
     ) {
         self.focusBoard = focusBoard
         self.projects = projects
-        self.aiChat = aiChat
         self.quickCapture = quickCapture
+        self.crossProjectRoadmap = crossProjectRoadmap
+        self.aiChat = aiChat
         self.settings = settings
     }
 
@@ -33,6 +37,8 @@ public struct AdaptiveNavigationView<
         AppNavigationView(
             focusBoard: focusBoard,
             projectBrowser: projects,
+            quickCapture: quickCapture,
+            crossProjectRoadmap: crossProjectRoadmap,
             aiChat: aiChat,
             settings: settings
         )

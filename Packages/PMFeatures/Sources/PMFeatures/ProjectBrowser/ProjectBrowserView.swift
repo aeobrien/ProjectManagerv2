@@ -136,13 +136,11 @@ public struct ProjectBrowserView: View {
                 }
             } else {
                 List(viewModel.filteredProjects) { project in
-                    ProjectRowView(
-                        project: project,
-                        categoryName: viewModel.categoryName(for: project)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onSelectProject?(project)
+                    NavigationLink(value: project) {
+                        ProjectRowView(
+                            project: project,
+                            categoryName: viewModel.categoryName(for: project)
+                        )
                     }
                     .contextMenu {
                         projectContextMenu(for: project)

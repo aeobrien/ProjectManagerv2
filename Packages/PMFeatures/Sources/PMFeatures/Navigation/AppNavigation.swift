@@ -4,6 +4,8 @@ import SwiftUI
 public enum NavigationSection: String, CaseIterable, Identifiable, Sendable {
     case focusBoard = "Focus Board"
     case allProjects = "All Projects"
+    case quickCapture = "Quick Capture"
+    case crossProjectRoadmap = "Roadmap"
     case aiChat = "AI Chat"
     case settings = "Settings"
 
@@ -13,6 +15,8 @@ public enum NavigationSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .focusBoard: "square.grid.2x2"
         case .allProjects: "folder"
+        case .quickCapture: "plus.circle"
+        case .crossProjectRoadmap: "map"
         case .aiChat: "bubble.left.and.bubble.right"
         case .settings: "gear"
         }
@@ -20,29 +24,42 @@ public enum NavigationSection: String, CaseIterable, Identifiable, Sendable {
 
     public var isMainSection: Bool {
         switch self {
-        case .focusBoard, .allProjects, .aiChat: true
+        case .focusBoard, .allProjects, .quickCapture, .crossProjectRoadmap, .aiChat: true
         case .settings: false
         }
     }
 }
 
 /// The root navigation shell for the macOS app.
-public struct AppNavigationView<FocusBoardContent: View, ProjectBrowserContent: View, AIChatContent: View, SettingsContent: View>: View {
+public struct AppNavigationView<
+    FocusBoardContent: View,
+    ProjectBrowserContent: View,
+    QuickCaptureContent: View,
+    CrossProjectRoadmapContent: View,
+    AIChatContent: View,
+    SettingsContent: View
+>: View {
     @State private var selectedSection: NavigationSection? = .focusBoard
 
     let focusBoard: () -> FocusBoardContent
     let projectBrowser: () -> ProjectBrowserContent
+    let quickCapture: () -> QuickCaptureContent
+    let crossProjectRoadmap: () -> CrossProjectRoadmapContent
     let aiChat: () -> AIChatContent
     let settings: () -> SettingsContent
 
     public init(
         @ViewBuilder focusBoard: @escaping () -> FocusBoardContent,
         @ViewBuilder projectBrowser: @escaping () -> ProjectBrowserContent,
+        @ViewBuilder quickCapture: @escaping () -> QuickCaptureContent,
+        @ViewBuilder crossProjectRoadmap: @escaping () -> CrossProjectRoadmapContent,
         @ViewBuilder aiChat: @escaping () -> AIChatContent,
         @ViewBuilder settings: @escaping () -> SettingsContent
     ) {
         self.focusBoard = focusBoard
         self.projectBrowser = projectBrowser
+        self.quickCapture = quickCapture
+        self.crossProjectRoadmap = crossProjectRoadmap
         self.aiChat = aiChat
         self.settings = settings
     }
@@ -69,6 +86,10 @@ public struct AppNavigationView<FocusBoardContent: View, ProjectBrowserContent: 
                 focusBoard()
             case .allProjects:
                 projectBrowser()
+            case .quickCapture:
+                quickCapture()
+            case .crossProjectRoadmap:
+                crossProjectRoadmap()
             case .aiChat:
                 aiChat()
             case .settings:

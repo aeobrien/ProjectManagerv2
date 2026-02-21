@@ -10,16 +10,49 @@ struct ContentView: View {
     @State private var projectBrowserVM: ProjectBrowserViewModel?
     @State private var focusBoardVM: FocusBoardViewModel?
     @State private var chatVM: ChatViewModel?
+    @State private var quickCaptureVM: QuickCaptureViewModel?
+    @State private var crossProjectRoadmapVM: CrossProjectRoadmapViewModel?
     @State private var settingsManager = SettingsManager()
     @State private var initError: String?
+    @State private var focusBoardNavPath = NavigationPath()
+    @State private var browserNavPath = NavigationPath()
+
+    // Repositories stored for creating detail VMs on demand
+    @State private var projectRepo: SQLiteProjectRepository?
+    @State private var categoryRepo: SQLiteCategoryRepository?
+    @State private var phaseRepo: SQLitePhaseRepository?
+    @State private var milestoneRepo: SQLiteMilestoneRepository?
+    @State private var taskRepo: SQLiteTaskRepository?
+    @State private var subtaskRepo: SQLiteSubtaskRepository?
+    @State private var dependencyRepo: SQLiteDependencyRepository?
+    @State private var documentRepo: SQLiteDocumentRepository?
+    @State private var checkInRepo: SQLiteCheckInRepository?
 
     var body: some View {
         Group {
-            if let projectBrowserVM, let focusBoardVM, let chatVM {
+            if let projectBrowserVM, let focusBoardVM, let chatVM, let quickCaptureVM, let crossProjectRoadmapVM {
                 AppNavigationView {
-                    FocusBoardView(viewModel: focusBoardVM)
+                    NavigationStack(path: $focusBoardNavPath) {
+                        FocusBoardView(viewModel: focusBoardVM) { project in
+                            focusBoardNavPath.append(project)
+                        }
+                        .navigationDestination(for: Project.self) { project in
+                            makeProjectDetailView(project: project)
+                        }
+                    }
                 } projectBrowser: {
-                    ProjectBrowserView(viewModel: projectBrowserVM)
+                    NavigationStack(path: $browserNavPath) {
+                        ProjectBrowserView(viewModel: projectBrowserVM) { project in
+                            browserNavPath.append(project)
+                        }
+                        .navigationDestination(for: Project.self) { project in
+                            makeProjectDetailView(project: project)
+                        }
+                    }
+                } quickCapture: {
+                    QuickCaptureView(viewModel: quickCaptureVM)
+                } crossProjectRoadmap: {
+                    CrossProjectRoadmapView(viewModel: crossProjectRoadmapVM)
                 } aiChat: {
                     ChatView(viewModel: chatVM)
                 } settings: {
@@ -46,6 +79,33 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private func makeProjectDetailView(project: Project) -> some View {
+        if let projectRepo, let phaseRepo, let milestoneRepo, let taskRepo, let subtaskRepo, let dependencyRepo {
+            let detailVM = ProjectDetailViewModel(
+                project: project,
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                subtaskRepo: subtaskRepo,
+                dependencyRepo: dependencyRepo
+            )
+            let roadmapVM = ProjectRoadmapViewModel(
+                project: project,
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                dependencyRepo: dependencyRepo
+            )
+            let docVM: DocumentViewModel? = documentRepo.map {
+                DocumentViewModel(projectId: project.id, documentRepo: $0)
+            }
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM)
+        }
+    }
+
     private func initialize() async {
         do {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -64,6 +124,18 @@ struct ContentView: View {
             let taskRepo = SQLiteTaskRepository(db: db.dbQueue)
             let subtaskRepo = SQLiteSubtaskRepository(db: db.dbQueue)
             let checkInRepo = SQLiteCheckInRepository(db: db.dbQueue)
+            let dependencyRepo = SQLiteDependencyRepository(db: db.dbQueue)
+            let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
+
+            self.projectRepo = projectRepo
+            self.categoryRepo = categoryRepo
+            self.phaseRepo = phaseRepo
+            self.milestoneRepo = milestoneRepo
+            self.taskRepo = taskRepo
+            self.subtaskRepo = subtaskRepo
+            self.checkInRepo = checkInRepo
+            self.dependencyRepo = dependencyRepo
+            self.documentRepo = documentRepo
 
             self.projectBrowserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,
@@ -78,8 +150,6 @@ struct ContentView: View {
                 phaseRepo: phaseRepo,
                 checkInRepo: checkInRepo
             )
-
-            let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
 
             let actionExecutor = ActionExecutor(
                 taskRepo: taskRepo,
@@ -97,6 +167,17 @@ struct ContentView: View {
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo,
                 checkInRepo: checkInRepo
+            )
+
+            self.quickCaptureVM = QuickCaptureViewModel(
+                projectRepo: projectRepo,
+                categoryRepo: categoryRepo
+            )
+
+            self.crossProjectRoadmapVM = CrossProjectRoadmapViewModel(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo
             )
 
             Log.ui.info("Database initialized at \(dbPath)")

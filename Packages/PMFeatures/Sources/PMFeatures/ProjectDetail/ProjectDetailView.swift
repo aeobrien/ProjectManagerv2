@@ -6,11 +6,17 @@ import PMDesignSystem
 public struct ProjectDetailView: View {
     @Bindable var viewModel: ProjectDetailViewModel
     var roadmapViewModel: ProjectRoadmapViewModel?
+    var documentViewModel: DocumentViewModel?
     @State private var selectedTab: DetailTab = .roadmap
 
-    public init(viewModel: ProjectDetailViewModel, roadmapViewModel: ProjectRoadmapViewModel? = nil) {
+    public init(
+        viewModel: ProjectDetailViewModel,
+        roadmapViewModel: ProjectRoadmapViewModel? = nil,
+        documentViewModel: DocumentViewModel? = nil
+    ) {
         self.viewModel = viewModel
         self.roadmapViewModel = roadmapViewModel
+        self.documentViewModel = documentViewModel
     }
 
     public var body: some View {
@@ -91,6 +97,12 @@ public struct ProjectDetailView: View {
                 } else {
                     PMEmptyState(icon: "map", title: "Timeline", message: "Timeline view not available.")
                 }
+            case .documents:
+                if let documentVM = documentViewModel {
+                    DocumentEditorView(viewModel: documentVM)
+                } else {
+                    PMEmptyState(icon: "doc", title: "Documents", message: "Document editing not available.")
+                }
             case .overview:
                 OverviewTabView(viewModel: viewModel)
             }
@@ -101,6 +113,7 @@ public struct ProjectDetailView: View {
 enum DetailTab: String, CaseIterable {
     case roadmap = "Roadmap"
     case timeline = "Timeline"
+    case documents = "Documents"
     case overview = "Overview"
 }
 

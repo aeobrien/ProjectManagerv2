@@ -44,9 +44,9 @@ struct EnumTests {
         #expect(Priority.normal.sortValue < Priority.low.sortValue)
     }
 
-    @Test("ConversationType has 7 cases")
+    @Test("ConversationType has 10 cases")
     func conversationTypeCases() {
-        #expect(ConversationType.allCases.count == 7)
+        #expect(ConversationType.allCases.count == 10)
     }
 
     @Test("Enums are Codable round-trip")

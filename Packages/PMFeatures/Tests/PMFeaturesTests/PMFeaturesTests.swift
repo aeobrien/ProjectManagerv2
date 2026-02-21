@@ -328,7 +328,7 @@ struct AppNavigationTests {
     @Test("NavigationSection main sections excludes settings")
     func mainSections() {
         let main = NavigationSection.allCases.filter(\.isMainSection)
-        #expect(main.count == 3)
+        #expect(main.count == 5)
         #expect(!main.contains(.settings))
     }
 }

@@ -96,8 +96,9 @@ struct SyncRecordTests {
     func syncChangeEquatable() {
         let id = UUID()
         let entityId = UUID()
-        let a = SyncChange(id: id, entityType: .project, entityId: entityId, changeType: .create)
-        let b = SyncChange(id: id, entityType: .project, entityId: entityId, changeType: .create)
+        let timestamp = Date()
+        let a = SyncChange(id: id, entityType: .project, entityId: entityId, changeType: .create, timestamp: timestamp)
+        let b = SyncChange(id: id, entityType: .project, entityId: entityId, changeType: .create, timestamp: timestamp)
         #expect(a == b)
     }
 }
