@@ -47,9 +47,9 @@ struct iOSContentView: View {
         Group {
             if let projectBrowserVM, let focusBoardVM, let chatVM, let quickCaptureVM {
                 IOSTabNavigationView(selectedTab: $selectedTab) {
-                    FocusBoardView(viewModel: focusBoardVM, reviewManager: reviewManager) { project in
+                    FocusBoardView(viewModel: focusBoardVM, onSelectProject: { project in
                         // Navigation handled by navigationDestination in IOSTabNavigationView's NavigationStack
-                    }
+                    }, reviewManager: reviewManager)
                     .navigationDestination(for: Project.self) { project in
                         makeProjectDetailView(project: project)
                     }
@@ -65,7 +65,21 @@ struct iOSContentView: View {
                 } quickCapture: {
                     QuickCaptureView(viewModel: quickCaptureVM)
                 } more: {
-                    SettingsView(settings: settingsManager, exportService: exportService, syncManager: syncManager)
+                    List {
+                        if let crossProjectRoadmapVM {
+                            NavigationLink {
+                                CrossProjectRoadmapView(viewModel: crossProjectRoadmapVM)
+                            } label: {
+                                Label("Cross-Project Roadmap", systemImage: "map")
+                            }
+                        }
+                        NavigationLink {
+                            SettingsView(settings: settingsManager, exportService: exportService, syncManager: syncManager)
+                        } label: {
+                            Label("Settings", systemImage: "gear")
+                        }
+                    }
+                    .navigationTitle("More")
                 }
             } else if let initError {
                 VStack(spacing: 12) {

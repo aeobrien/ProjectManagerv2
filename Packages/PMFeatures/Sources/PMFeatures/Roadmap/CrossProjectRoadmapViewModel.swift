@@ -112,7 +112,7 @@ public final class CrossProjectRoadmapViewModel {
                             projectId: project.id,
                             deadline: ms.deadline,
                             status: ms.status,
-                            colorIndex: index % 6  // Cycle through 6 colours
+                            colorIndex: index % 5  // Cycle through 5 SlotColours
                         ))
                     }
                 }
