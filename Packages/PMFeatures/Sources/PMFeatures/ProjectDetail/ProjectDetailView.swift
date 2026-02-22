@@ -8,6 +8,7 @@ public struct ProjectDetailView: View {
     var roadmapViewModel: ProjectRoadmapViewModel?
     var documentViewModel: DocumentViewModel?
     var analyticsViewModel: AnalyticsViewModel?
+    var adversarialReviewManager: AdversarialReviewManager?
     @State private var selectedTab: DetailTab = .roadmap
     @State private var showRetrospective = false
 
@@ -15,12 +16,14 @@ public struct ProjectDetailView: View {
         viewModel: ProjectDetailViewModel,
         roadmapViewModel: ProjectRoadmapViewModel? = nil,
         documentViewModel: DocumentViewModel? = nil,
-        analyticsViewModel: AnalyticsViewModel? = nil
+        analyticsViewModel: AnalyticsViewModel? = nil,
+        adversarialReviewManager: AdversarialReviewManager? = nil
     ) {
         self.viewModel = viewModel
         self.roadmapViewModel = roadmapViewModel
         self.documentViewModel = documentViewModel
         self.analyticsViewModel = analyticsViewModel
+        self.adversarialReviewManager = adversarialReviewManager
     }
 
     public var body: some View {
@@ -176,6 +179,12 @@ public struct ProjectDetailView: View {
                 } else {
                     PMEmptyState(icon: "chart.bar", title: "Analytics", message: "Analytics not available.")
                 }
+            case .review:
+                if let reviewMgr = adversarialReviewManager {
+                    AdversarialReviewView(manager: reviewMgr, project: viewModel.project)
+                } else {
+                    PMEmptyState(icon: "sparkles", title: "Review", message: "Adversarial review not available.")
+                }
             }
         }
     }
@@ -186,6 +195,7 @@ enum DetailTab: String, CaseIterable {
     case timeline = "Timeline"
     case documents = "Documents"
     case analytics = "Analytics"
+    case review = "Review"
     case overview = "Overview"
 }
 

@@ -161,7 +161,10 @@ struct iOSContentView: View {
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo
             )
-            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM)
+            let adversarialVM: AdversarialReviewManager? = documentRepo.map { docRepo in
+                AdversarialReviewManager(documentRepo: docRepo, llmClient: LLMClient())
+            }
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM)
         }
     }
 
