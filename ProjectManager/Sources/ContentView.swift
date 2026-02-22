@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var retrospectiveManager: RetrospectiveFlowManager?
     @State private var knowledgeBaseManager: KnowledgeBaseManager?
     @State private var syncManager: SyncManager?
+    @State private var httpServer: HTTPServer?
     @State private var initError: String?
     @State private var selectedBrowserProject: Project?
     @State private var selectedFocusBoardProject: Project?
@@ -413,6 +414,26 @@ struct ContentView: View {
             // Trigger Life Planner export on launch if enabled
             if settingsManager.lifePlannerSyncEnabled {
                 _ = await expService.triggerLifePlannerExport()
+            }
+
+            // Start integration API server if enabled
+            if settingsManager.integrationAPIEnabled {
+                let apiConfig = APIServerConfig(
+                    port: UInt16(settingsManager.integrationAPIPort),
+                    apiKey: settingsManager.integrationAPIKey.isEmpty ? nil : settingsManager.integrationAPIKey,
+                    enabled: true
+                )
+                let apiHandler = IntegrationAPIHandler(
+                    config: apiConfig,
+                    projectRepo: projectRepo,
+                    phaseRepo: phaseRepo,
+                    milestoneRepo: milestoneRepo,
+                    taskRepo: taskRepo,
+                    documentRepo: documentRepo
+                )
+                let server = HTTPServer(handler: apiHandler, config: apiConfig)
+                try await server.start()
+                self.httpServer = server
             }
 
             Log.ui.info("Database initialized at \(dbPath)")

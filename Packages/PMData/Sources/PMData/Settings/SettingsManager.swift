@@ -49,6 +49,7 @@ public final class SettingsManager {
             Keys.lifePlannerFilePath: "",
             Keys.integrationAPIEnabled: false,
             Keys.integrationAPIPort: 8420,
+            Keys.integrationAPIKey: "",
             Keys.returnBriefingThresholdDays: 14,
             Keys.doneColumnRetentionDays: 7,
             Keys.doneColumnMaxItems: 20,
@@ -89,6 +90,7 @@ public final class SettingsManager {
         lifePlannerFilePath = defaults.string(forKey: Keys.lifePlannerFilePath) ?? ""
         integrationAPIEnabled = defaults.bool(forKey: Keys.integrationAPIEnabled)
         integrationAPIPort = defaults.integer(forKey: Keys.integrationAPIPort).clamped(to: 1024...65535)
+        integrationAPIKey = defaults.string(forKey: Keys.integrationAPIKey) ?? ""
     }
 
     // MARK: - Focus Board
@@ -240,6 +242,10 @@ public final class SettingsManager {
     public var integrationAPIPort: Int = 8420 {
         didSet { defaults.set(integrationAPIPort.clamped(to: 1024...65535), forKey: Keys.integrationAPIPort) }
     }
+
+    public var integrationAPIKey: String = "" {
+        didSet { defaults.set(integrationAPIKey, forKey: Keys.integrationAPIKey) }
+    }
 }
 
 // MARK: - Keys
@@ -275,6 +281,7 @@ private enum Keys {
     static let lifePlannerFilePath = "settings.lifePlannerFilePath"
     static let integrationAPIEnabled = "settings.integrationAPIEnabled"
     static let integrationAPIPort = "settings.integrationAPIPort"
+    static let integrationAPIKey = "settings.integrationAPIKey"
     static let returnBriefingThresholdDays = "settings.returnBriefingThresholdDays"
     static let doneColumnRetentionDays = "settings.doneColumnRetentionDays"
     static let doneColumnMaxItems = "settings.doneColumnMaxItems"

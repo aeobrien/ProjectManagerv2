@@ -52,6 +52,8 @@ public final class IntegrationAPIHandler: APIHandlerProtocol, Sendable {
     private let router: APIRouter
     private let config: APIServerConfig
     private let projectRepo: ProjectRepositoryProtocol
+    private let phaseRepo: PhaseRepositoryProtocol
+    private let milestoneRepo: MilestoneRepositoryProtocol
     private let taskRepo: TaskRepositoryProtocol
     private let documentRepo: DocumentRepositoryProtocol
     private let _auditLog: ManagedAtomic<[AuditLogEntry]>
@@ -59,12 +61,16 @@ public final class IntegrationAPIHandler: APIHandlerProtocol, Sendable {
     public init(
         config: APIServerConfig,
         projectRepo: ProjectRepositoryProtocol,
+        phaseRepo: PhaseRepositoryProtocol,
+        milestoneRepo: MilestoneRepositoryProtocol,
         taskRepo: TaskRepositoryProtocol,
         documentRepo: DocumentRepositoryProtocol
     ) {
         self.router = APIRouter()
         self.config = config
         self.projectRepo = projectRepo
+        self.phaseRepo = phaseRepo
+        self.milestoneRepo = milestoneRepo
         self.taskRepo = taskRepo
         self.documentRepo = documentRepo
         self._auditLog = ManagedAtomic([])
@@ -129,16 +135,36 @@ public final class IntegrationAPIHandler: APIHandlerProtocol, Sendable {
                 return .badRequest("Invalid task ID")
             }
             return await handleCompleteTask(id)
+        case "updateTask":
+            guard let id = params["taskId"].flatMap(UUID.init) else {
+                return .badRequest("Invalid task ID")
+            }
+            return await handleUpdateTask(id, body: request.body)
         case "addTaskNotes":
             guard let id = params["taskId"].flatMap(UUID.init) else {
                 return .badRequest("Invalid task ID")
             }
             return await handleAddTaskNotes(id, body: request.body)
+        case "createTask":
+            guard let id = params["projectId"].flatMap(UUID.init) else {
+                return .badRequest("Invalid project ID")
+            }
+            return await handleCreateTask(projectId: id, body: request.body)
+        case "reportIssue":
+            guard let id = params["projectId"].flatMap(UUID.init) else {
+                return .badRequest("Invalid project ID")
+            }
+            return await handleReportIssue(projectId: id, body: request.body)
         case "listDocuments":
             guard let id = params["projectId"].flatMap(UUID.init) else {
                 return .badRequest("Invalid project ID")
             }
             return await handleListDocuments(projectId: id)
+        case "updateDocument":
+            guard let id = params["documentId"].flatMap(UUID.init) else {
+                return .badRequest("Invalid document ID")
+            }
+            return await handleUpdateDocument(id, body: request.body)
         default:
             return .notFound
         }
@@ -168,9 +194,16 @@ public final class IntegrationAPIHandler: APIHandlerProtocol, Sendable {
 
     private func handleListTasks(projectId: UUID) async -> APIResponse {
         do {
-            // This is simplified — in production, we'd traverse phases→milestones→tasks
-            let tasks = try await taskRepo.fetchAll(forMilestone: projectId)
-            return .json(tasks)
+            var allTasks: [PMTask] = []
+            let phases = try await phaseRepo.fetchAll(forProject: projectId)
+            for phase in phases {
+                let milestones = try await milestoneRepo.fetchAll(forPhase: phase.id)
+                for ms in milestones {
+                    let tasks = try await taskRepo.fetchAll(forMilestone: ms.id)
+                    allTasks.append(contentsOf: tasks)
+                }
+            }
+            return .json(allTasks)
         } catch {
             return .error("Failed to fetch tasks: \(error.localizedDescription)", status: 500)
         }
@@ -207,6 +240,65 @@ public final class IntegrationAPIHandler: APIHandlerProtocol, Sendable {
         }
     }
 
+    private func handleUpdateTask(_ id: UUID, body: Data?) async -> APIResponse {
+        guard let body, let payload = try? JSONDecoder().decode(TaskUpdatePayload.self, from: body) else {
+            return .badRequest("Invalid request body")
+        }
+        do {
+            guard var task = try await taskRepo.fetch(id: id) else {
+                return .notFound
+            }
+            if let name = payload.name { task.name = name }
+            if let status = payload.status { task.status = status }
+            if let priority = payload.priority { task.priority = priority }
+            if let dod = payload.definitionOfDone { task.definitionOfDone = dod }
+            if let notes = payload.notes { task.notes = notes }
+            try await taskRepo.save(task)
+            Log.api.info("Updated task \(id) via API")
+            return .json(task)
+        } catch {
+            return .error("Failed to update task: \(error.localizedDescription)", status: 500)
+        }
+    }
+
+    private func handleCreateTask(projectId: UUID, body: Data?) async -> APIResponse {
+        guard let body, let payload = try? JSONDecoder().decode(CreateTaskPayload.self, from: body) else {
+            return .badRequest("Invalid request body — requires milestoneId and name")
+        }
+        do {
+            let task = PMTask(
+                milestoneId: payload.milestoneId,
+                name: payload.name,
+                priority: payload.priority ?? .normal,
+                effortType: payload.effortType ?? .quickWin
+            )
+            try await taskRepo.save(task)
+            Log.api.info("Created task '\(task.name)' via API")
+            return .json(task, status: 201)
+        } catch {
+            return .error("Failed to create task: \(error.localizedDescription)", status: 500)
+        }
+    }
+
+    private func handleReportIssue(projectId: UUID, body: Data?) async -> APIResponse {
+        guard let body, let payload = try? JSONDecoder().decode(IssuePayload.self, from: body) else {
+            return .badRequest("Invalid request body — requires description")
+        }
+        do {
+            guard var project = try await projectRepo.fetch(id: projectId) else {
+                return .notFound
+            }
+            let existing = project.notes ?? ""
+            let issueEntry = "[Issue] \(payload.description)"
+            project.notes = existing.isEmpty ? issueEntry : "\(existing)\n\(issueEntry)"
+            try await projectRepo.save(project)
+            Log.api.info("Reported issue for project \(projectId) via API")
+            return .json(["status": "recorded", "projectId": projectId.uuidString], status: 201)
+        } catch {
+            return .error("Failed to report issue: \(error.localizedDescription)", status: 500)
+        }
+    }
+
     private func handleListDocuments(projectId: UUID) async -> APIResponse {
         do {
             let docs = try await documentRepo.fetchAll(forProject: projectId)
@@ -215,10 +307,54 @@ public final class IntegrationAPIHandler: APIHandlerProtocol, Sendable {
             return .error("Failed to fetch documents: \(error.localizedDescription)", status: 500)
         }
     }
+
+    private func handleUpdateDocument(_ id: UUID, body: Data?) async -> APIResponse {
+        guard let body, let payload = try? JSONDecoder().decode(DocumentUpdatePayload.self, from: body) else {
+            return .badRequest("Invalid request body")
+        }
+        do {
+            guard var doc = try await documentRepo.fetch(id: id) else {
+                return .notFound
+            }
+            if let title = payload.title { doc.title = title }
+            if let content = payload.content { doc.content = content }
+            doc.updatedAt = Date()
+            doc.version += 1
+            try await documentRepo.save(doc)
+            Log.api.info("Updated document \(id) via API")
+            return .json(doc)
+        } catch {
+            return .error("Failed to update document: \(error.localizedDescription)", status: 500)
+        }
+    }
 }
 
 // MARK: - Request Payloads
 
 struct NotesPayload: Codable, Sendable {
     let notes: String
+}
+
+struct TaskUpdatePayload: Codable, Sendable {
+    let name: String?
+    let status: ItemStatus?
+    let priority: Priority?
+    let definitionOfDone: String?
+    let notes: String?
+}
+
+struct CreateTaskPayload: Codable, Sendable {
+    let milestoneId: UUID
+    let name: String
+    let priority: Priority?
+    let effortType: EffortType?
+}
+
+struct IssuePayload: Codable, Sendable {
+    let description: String
+}
+
+struct DocumentUpdatePayload: Codable, Sendable {
+    let title: String?
+    let content: String?
 }

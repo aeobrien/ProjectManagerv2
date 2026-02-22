@@ -19,6 +19,7 @@ struct iOSContentView: View {
     @State private var retrospectiveManager: RetrospectiveFlowManager?
     @State private var knowledgeBaseManager: KnowledgeBaseManager?
     @State private var syncManager: SyncManager?
+    @State private var httpServer: HTTPServer?
     @State private var notificationManager: NotificationManager?
     @State private var crossProjectRoadmapVM: CrossProjectRoadmapViewModel?
     @State private var initError: String?
@@ -396,6 +397,26 @@ struct iOSContentView: View {
             // Trigger Life Planner export on launch if enabled
             if settingsManager.lifePlannerSyncEnabled {
                 _ = await expService.triggerLifePlannerExport()
+            }
+
+            // Start integration API server if enabled
+            if settingsManager.integrationAPIEnabled {
+                let apiConfig = APIServerConfig(
+                    port: UInt16(settingsManager.integrationAPIPort),
+                    apiKey: settingsManager.integrationAPIKey.isEmpty ? nil : settingsManager.integrationAPIKey,
+                    enabled: true
+                )
+                let apiHandler = IntegrationAPIHandler(
+                    config: apiConfig,
+                    projectRepo: projectRepo,
+                    phaseRepo: phaseRepo,
+                    milestoneRepo: milestoneRepo,
+                    taskRepo: taskRepo,
+                    documentRepo: documentRepo
+                )
+                let server = HTTPServer(handler: apiHandler, config: apiConfig)
+                try await server.start()
+                self.httpServer = server
             }
 
             // Update widget shared data

@@ -34,6 +34,7 @@ struct SettingsManagerTests {
         #expect(s.lifePlannerSyncMethod == "mysql")
         #expect(s.integrationAPIEnabled == false)
         #expect(s.integrationAPIPort == 8420)
+        #expect(s.integrationAPIKey == "")
         #expect(s.returnBriefingThresholdDays == 14)
         #expect(s.doneColumnRetentionDays == 7)
         #expect(s.doneColumnMaxItems == 20)

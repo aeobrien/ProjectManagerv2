@@ -30,9 +30,9 @@ public actor HTTPServer {
         listener.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                Log.data.info("Integration API server listening on port \(port)")
+                Log.api.info("Integration API server listening on port \(port)")
             case .failed(let error):
-                Log.data.error("Integration API server failed: \(error)")
+                Log.api.error("Integration API server failed: \(error)")
             default:
                 break
             }
@@ -47,7 +47,7 @@ public actor HTTPServer {
 
         listener.start(queue: .global(qos: .utility))
         isRunning = true
-        Log.data.info("HTTP server starting on port \(port)")
+        Log.api.info("HTTP server starting on port \(port)")
     }
 
     /// Stop the server.
@@ -59,7 +59,7 @@ public actor HTTPServer {
         }
         connections.removeAll()
         isRunning = false
-        Log.data.info("HTTP server stopped")
+        Log.api.info("HTTP server stopped")
     }
 
     // MARK: - Connection Handling
@@ -79,7 +79,7 @@ public actor HTTPServer {
                     let httpResponse = await self.formatHTTPResponse(apiResponse)
                     await self.sendResponse(httpResponse, on: connection, connectionId: id)
                 } else if let error {
-                    Log.data.error("Connection error: \(error)")
+                    Log.api.error("Connection error: \(error)")
                     await self.removeConnection(id: id)
                 }
             }
@@ -183,7 +183,7 @@ public actor HTTPServer {
     private func sendResponse(_ data: Data, on connection: NWConnection, connectionId: UUID) {
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
             if let error {
-                Log.data.error("Failed to send response: \(error)")
+                Log.api.error("Failed to send response: \(error)")
             }
             Task { [weak self] in
                 await self?.removeConnection(id: connectionId)

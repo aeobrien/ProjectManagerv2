@@ -49,6 +49,30 @@ final class APITestDocRepo: DocumentRepositoryProtocol, @unchecked Sendable {
     func search(query: String) async throws -> [Document] { documents.filter { $0.title.contains(query) } }
 }
 
+final class APITestPhaseRepo: PhaseRepositoryProtocol, @unchecked Sendable {
+    var phases: [Phase] = []
+    func fetchAll(forProject projectId: UUID) async throws -> [Phase] { phases.filter { $0.projectId == projectId } }
+    func fetch(id: UUID) async throws -> Phase? { phases.first { $0.id == id } }
+    func save(_ phase: Phase) async throws {
+        if let idx = phases.firstIndex(where: { $0.id == phase.id }) { phases[idx] = phase }
+        else { phases.append(phase) }
+    }
+    func delete(id: UUID) async throws { phases.removeAll { $0.id == id } }
+    func reorder(phases: [Phase]) async throws { self.phases = phases }
+}
+
+final class APITestMilestoneRepo: MilestoneRepositoryProtocol, @unchecked Sendable {
+    var milestones: [Milestone] = []
+    func fetchAll(forPhase phaseId: UUID) async throws -> [Milestone] { milestones.filter { $0.phaseId == phaseId } }
+    func fetch(id: UUID) async throws -> Milestone? { milestones.first { $0.id == id } }
+    func save(_ milestone: Milestone) async throws {
+        if let idx = milestones.firstIndex(where: { $0.id == milestone.id }) { milestones[idx] = milestone }
+        else { milestones.append(milestone) }
+    }
+    func delete(id: UUID) async throws { milestones.removeAll { $0.id == id } }
+    func reorder(milestones: [Milestone]) async throws { self.milestones = milestones }
+}
+
 // MARK: - APIRouter Tests
 
 @Suite("APIRouter")
@@ -181,6 +205,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )
@@ -197,6 +223,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )
@@ -216,6 +244,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )
@@ -236,6 +266,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: projectRepo,
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )
@@ -256,6 +288,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: projectRepo,
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )
@@ -271,6 +305,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )
@@ -290,6 +326,8 @@ struct IntegrationAPIHandlerTests {
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: taskRepo,
             documentRepo: APITestDocRepo()
         )
@@ -304,12 +342,109 @@ struct IntegrationAPIHandlerTests {
         #expect(log.first?.success == true)
     }
 
+    @Test("Update task via PATCH")
+    func updateTask() async {
+        let config = APIServerConfig()
+        let taskRepo = APITestTaskRepo()
+        let task = PMTask(milestoneId: UUID(), name: "Original")
+        taskRepo.tasks = [task]
+
+        let handler = IntegrationAPIHandler(
+            config: config,
+            projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
+            taskRepo: taskRepo,
+            documentRepo: APITestDocRepo()
+        )
+
+        let body = try! JSONEncoder().encode(["name": "Updated"])
+        let request = APIRequest(method: .PATCH, path: "/api/v1/tasks/\(task.id.uuidString)", body: body)
+        let response = await handler.handle(request)
+        #expect(response.statusCode == 200)
+        #expect(taskRepo.tasks.first?.name == "Updated")
+    }
+
+    @Test("Create task via POST")
+    func createTask() async {
+        let config = APIServerConfig()
+        let projectId = UUID()
+        let phaseId = UUID()
+        let msId = UUID()
+        let taskRepo = APITestTaskRepo()
+
+        let handler = IntegrationAPIHandler(
+            config: config,
+            projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
+            taskRepo: taskRepo,
+            documentRepo: APITestDocRepo()
+        )
+
+        let body = try! JSONEncoder().encode(["milestoneId": msId.uuidString, "name": "New Task"])
+        let request = APIRequest(method: .POST, path: "/api/v1/projects/\(projectId.uuidString)/tasks", body: body)
+        let response = await handler.handle(request)
+        #expect(response.statusCode == 201)
+        #expect(taskRepo.tasks.count == 1)
+        #expect(taskRepo.tasks.first?.name == "New Task")
+    }
+
+    @Test("Report issue via POST")
+    func reportIssue() async {
+        let config = APIServerConfig()
+        let projectRepo = APITestProjectRepo()
+        let project = Project(name: "App", categoryId: UUID())
+        projectRepo.projects = [project]
+
+        let handler = IntegrationAPIHandler(
+            config: config,
+            projectRepo: projectRepo,
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
+            taskRepo: APITestTaskRepo(),
+            documentRepo: APITestDocRepo()
+        )
+
+        let body = try! JSONEncoder().encode(["description": "Something broke"])
+        let request = APIRequest(method: .POST, path: "/api/v1/projects/\(project.id.uuidString)/issues", body: body)
+        let response = await handler.handle(request)
+        #expect(response.statusCode == 201)
+        #expect(projectRepo.projects.first?.notes?.contains("[Issue]") == true)
+    }
+
+    @Test("Update document via PATCH")
+    func updateDocument() async {
+        let config = APIServerConfig()
+        let docRepo = APITestDocRepo()
+        let doc = Document(projectId: UUID(), type: .other, title: "Old", content: "old content")
+        docRepo.documents = [doc]
+
+        let handler = IntegrationAPIHandler(
+            config: config,
+            projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
+            taskRepo: APITestTaskRepo(),
+            documentRepo: docRepo
+        )
+
+        let body = try! JSONEncoder().encode(["title": "New Title", "content": "new content"])
+        let request = APIRequest(method: .PATCH, path: "/api/v1/documents/\(doc.id.uuidString)", body: body)
+        let response = await handler.handle(request)
+        #expect(response.statusCode == 200)
+        #expect(docRepo.documents.first?.title == "New Title")
+        #expect(docRepo.documents.first?.content == "new content")
+    }
+
     @Test("Unknown route returns 404")
     func unknownRoute() async {
         let config = APIServerConfig()
         let handler = IntegrationAPIHandler(
             config: config,
             projectRepo: APITestProjectRepo(),
+            phaseRepo: APITestPhaseRepo(),
+            milestoneRepo: APITestMilestoneRepo(),
             taskRepo: APITestTaskRepo(),
             documentRepo: APITestDocRepo()
         )

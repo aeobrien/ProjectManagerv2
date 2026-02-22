@@ -403,6 +403,8 @@ public struct SettingsView: View {
 
                 if settings.integrationAPIEnabled {
                     Stepper("Port: \(settings.integrationAPIPort)", value: $settings.integrationAPIPort, in: 1024...65535)
+                    SecureField("API key (optional)", text: $settings.integrationAPIKey)
+                        .textFieldStyle(.roundedBorder)
                 }
             }
         }
