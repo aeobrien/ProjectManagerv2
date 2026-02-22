@@ -46,6 +46,20 @@ public struct VoiceInputView: View {
                 WaveformView(levels: manager.audioLevels)
                     .frame(height: 50)
                     .padding(.horizontal, 8)
+            } else if manager.isLoadingModel {
+                VStack(spacing: 4) {
+                    ProgressView()
+                    Text("Loading speech model...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if manager.state == .requestingPermission {
+                VStack(spacing: 4) {
+                    ProgressView()
+                    Text("Requesting microphone access...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else if manager.isProcessing {
                 ProgressView("Transcribing...")
                     .font(.caption)

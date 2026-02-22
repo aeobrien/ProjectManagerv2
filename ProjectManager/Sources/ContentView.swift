@@ -15,10 +15,20 @@ struct ContentView: View {
     @State private var crossProjectRoadmapVM: CrossProjectRoadmapViewModel?
     @State private var settingsManager = SettingsManager()
     @State private var notificationManager: NotificationManager?
+    @State private var exportService: ExportService?
+    @State private var checkInFlowManager: CheckInFlowManager?
+    @State private var onboardingManager: OnboardingFlowManager?
+    @State private var retrospectiveManager: RetrospectiveFlowManager?
+    @State private var knowledgeBaseManager: KnowledgeBaseManager?
+    @State private var syncManager: SyncManager?
     @State private var initError: String?
-    @State private var focusBoardNavPath = NavigationPath()
-    @State private var browserNavPath = NavigationPath()
+    @State private var selectedBrowserProject: Project?
+    @State private var selectedFocusBoardProject: Project?
     @State private var showQuickCaptureSheet = false
+
+    // Cache detail ViewModels by project ID to preserve expansion state across navigation
+    @State private var detailVMCache: [UUID: ProjectDetailViewModel] = [:]
+    @State private var docVMCache: [UUID: DocumentViewModel] = [:]
 
     // Repositories stored for creating detail VMs on demand
     @State private var projectRepo: SQLiteProjectRepository?
@@ -29,6 +39,7 @@ struct ContentView: View {
     @State private var subtaskRepo: SQLiteSubtaskRepository?
     @State private var dependencyRepo: SQLiteDependencyRepository?
     @State private var documentRepo: SQLiteDocumentRepository?
+    @State private var documentVersionRepo: SQLiteDocumentVersionRepository?
     @State private var checkInRepo: SQLiteCheckInRepository?
     @State private var conversationRepo: SQLiteConversationRepository?
 
@@ -36,22 +47,38 @@ struct ContentView: View {
         Group {
             if let projectBrowserVM, let focusBoardVM, let chatVM, let quickCaptureVM, let crossProjectRoadmapVM {
                 AppNavigationView {
-                    NavigationStack(path: $focusBoardNavPath) {
+                    if let project = selectedFocusBoardProject {
+                        makeProjectDetailView(project: project)
+                            .toolbar {
+                                ToolbarItem(placement: .navigation) {
+                                    Button {
+                                        selectedFocusBoardProject = nil
+                                    } label: {
+                                        Label("Back", systemImage: "chevron.left")
+                                    }
+                                }
+                            }
+                    } else {
                         FocusBoardView(viewModel: focusBoardVM) { project in
-                            focusBoardNavPath.append(project)
-                        }
-                        .navigationDestination(for: Project.self) { project in
-                            makeProjectDetailView(project: project)
+                            selectedFocusBoardProject = project
                         }
                     }
                 } projectBrowser: {
-                    NavigationStack(path: $browserNavPath) {
-                        ProjectBrowserView(viewModel: projectBrowserVM) { project in
-                            browserNavPath.append(project)
-                        }
-                        .navigationDestination(for: Project.self) { project in
-                            makeProjectDetailView(project: project)
-                        }
+                    if let project = selectedBrowserProject {
+                        makeProjectDetailView(project: project)
+                            .toolbar {
+                                ToolbarItem(placement: .navigation) {
+                                    Button {
+                                        selectedBrowserProject = nil
+                                    } label: {
+                                        Label("Back", systemImage: "chevron.left")
+                                    }
+                                }
+                            }
+                    } else {
+                        ProjectBrowserView(viewModel: projectBrowserVM, onSelectProject: { project in
+                            selectedBrowserProject = project
+                        }, onboardingManager: onboardingManager)
                     }
                 } quickCapture: {
                     QuickCaptureView(viewModel: quickCaptureVM)
@@ -60,7 +87,7 @@ struct ContentView: View {
                 } aiChat: {
                     ChatView(viewModel: chatVM)
                 } settings: {
-                    SettingsView(settings: settingsManager)
+                    SettingsView(settings: settingsManager, exportService: exportService, syncManager: syncManager)
                 }
             } else if let initError {
                 VStack(spacing: 12) {
@@ -95,7 +122,24 @@ struct ContentView: View {
     @ViewBuilder
     private func makeProjectDetailView(project: Project) -> some View {
         if let projectRepo, let phaseRepo, let milestoneRepo, let taskRepo, let subtaskRepo, let dependencyRepo {
-            let detailVM = ProjectDetailViewModel(
+            let detailVM = detailVMCache[project.id] ?? {
+                let vm = ProjectDetailViewModel(
+                    project: project,
+                    projectRepo: projectRepo,
+                    phaseRepo: phaseRepo,
+                    milestoneRepo: milestoneRepo,
+                    taskRepo: taskRepo,
+                    subtaskRepo: subtaskRepo,
+                    dependencyRepo: dependencyRepo
+                )
+                vm.retrospectiveManager = retrospectiveManager
+                vm.knowledgeBaseManager = knowledgeBaseManager
+                vm.syncManager = syncManager
+                vm.notificationManager = notificationManager
+                DispatchQueue.main.async { detailVMCache[project.id] = vm }
+                return vm
+            }()
+            let roadmapVM = ProjectRoadmapViewModel(
                 project: project,
                 projectRepo: projectRepo,
                 phaseRepo: phaseRepo,
@@ -104,17 +148,13 @@ struct ContentView: View {
                 subtaskRepo: subtaskRepo,
                 dependencyRepo: dependencyRepo
             )
-            let roadmapVM = ProjectRoadmapViewModel(
-                project: project,
-                projectRepo: projectRepo,
-                phaseRepo: phaseRepo,
-                milestoneRepo: milestoneRepo,
-                taskRepo: taskRepo,
-                dependencyRepo: dependencyRepo
-            )
-            let docVM: DocumentViewModel? = documentRepo.map {
-                DocumentViewModel(projectId: project.id, documentRepo: $0)
-            }
+            let docVM: DocumentViewModel? = docVMCache[project.id] ?? {
+                guard let documentRepo else { return nil }
+                let vm = DocumentViewModel(projectId: project.id, documentRepo: documentRepo, versionRepo: documentVersionRepo, knowledgeBaseManager: knowledgeBaseManager)
+                vm.syncManager = syncManager
+                DispatchQueue.main.async { docVMCache[project.id] = vm }
+                return vm
+            }()
             ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM)
         }
     }
@@ -139,6 +179,7 @@ struct ContentView: View {
             let checkInRepo = SQLiteCheckInRepository(db: db.dbQueue)
             let dependencyRepo = SQLiteDependencyRepository(db: db.dbQueue)
             let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
+            let documentVersionRepo = SQLiteDocumentVersionRepository(db: db.dbQueue)
             let conversationRepo = SQLiteConversationRepository(db: db.dbQueue)
 
             self.projectRepo = projectRepo
@@ -150,24 +191,10 @@ struct ContentView: View {
             self.checkInRepo = checkInRepo
             self.dependencyRepo = dependencyRepo
             self.documentRepo = documentRepo
+            self.documentVersionRepo = documentVersionRepo
             self.conversationRepo = conversationRepo
 
-            self.projectBrowserVM = ProjectBrowserViewModel(
-                projectRepo: projectRepo,
-                categoryRepo: categoryRepo,
-                documentRepo: documentRepo
-            )
-
-            self.focusBoardVM = FocusBoardViewModel(
-                projectRepo: projectRepo,
-                categoryRepo: categoryRepo,
-                taskRepo: taskRepo,
-                milestoneRepo: milestoneRepo,
-                phaseRepo: phaseRepo,
-                checkInRepo: checkInRepo
-            )
-
-            let actionExecutor = ActionExecutor(
+            var actionExecutor = ActionExecutor(
                 taskRepo: taskRepo,
                 milestoneRepo: milestoneRepo,
                 subtaskRepo: subtaskRepo,
@@ -175,7 +202,104 @@ struct ContentView: View {
                 documentRepo: documentRepo
             )
 
-            self.chatVM = ChatViewModel(
+            let embeddingService = EmbeddingService()
+            let kbStore = InMemoryKnowledgeBaseStore()
+            let kbManager = KnowledgeBaseManager(store: kbStore, embeddingService: embeddingService)
+            self.knowledgeBaseManager = kbManager
+
+            let syncDataProvider = RepositorySyncDataProvider(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                subtaskRepo: subtaskRepo,
+                checkInRepo: checkInRepo,
+                documentRepo: documentRepo,
+                categoryRepo: categoryRepo,
+                conversationRepo: conversationRepo,
+                dependencyRepo: dependencyRepo
+            )
+            let syncBackend = CloudKitSyncBackend()
+            let syncQueue = InMemorySyncQueue()
+            let syncEngine = SyncEngine(
+                backend: syncBackend,
+                queue: syncQueue,
+                dataProvider: syncDataProvider
+            )
+            let syncMgr = SyncManager(syncEngine: syncEngine)
+            syncMgr.syncEnabled = settingsManager.syncEnabled
+            self.syncManager = syncMgr
+
+            // Wire sync change tracking into ActionExecutor
+            actionExecutor.onChangeTracked = { entityType, entityId, changeType in
+                guard let syncType = SyncEntityType(rawValue: entityType),
+                      let syncChange = SyncChangeType(rawValue: changeType) else { return }
+                Task { @MainActor in
+                    syncMgr.trackChange(entityType: syncType, entityId: entityId, changeType: syncChange)
+                }
+            }
+
+            let checkInManager = CheckInFlowManager(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                checkInRepo: checkInRepo,
+                llmClient: LLMClient(),
+                actionExecutor: actionExecutor,
+                contextAssembler: ContextAssembler(knowledgeBase: kbManager)
+            )
+            checkInManager.gentleThresholdDays = settingsManager.checkInGentlePromptDays
+            checkInManager.moderateThresholdDays = settingsManager.checkInModeratePromptDays
+            checkInManager.prominentThresholdDays = settingsManager.checkInProminentPromptDays
+            checkInManager.deferredThreshold = settingsManager.deferredThreshold
+            checkInManager.knowledgeBaseManager = kbManager
+            checkInManager.syncManager = syncMgr
+            self.checkInFlowManager = checkInManager
+
+            let onboardingMgr = OnboardingFlowManager(
+                llmClient: LLMClient(),
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                documentRepo: documentRepo
+            )
+            onboardingMgr.syncManager = syncMgr
+            self.onboardingManager = onboardingMgr
+
+            let retroManager = RetrospectiveFlowManager(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                checkInRepo: checkInRepo,
+                llmClient: LLMClient()
+            )
+            retroManager.syncManager = syncMgr
+            self.retrospectiveManager = retroManager
+
+            let browserVM = ProjectBrowserViewModel(
+                projectRepo: projectRepo,
+                categoryRepo: categoryRepo,
+                documentRepo: documentRepo
+            )
+            browserVM.syncManager = syncMgr
+            self.projectBrowserVM = browserVM
+
+            let focusBoardVM = FocusBoardViewModel(
+                projectRepo: projectRepo,
+                categoryRepo: categoryRepo,
+                taskRepo: taskRepo,
+                milestoneRepo: milestoneRepo,
+                phaseRepo: phaseRepo,
+                checkInRepo: checkInRepo,
+                checkInFlowManager: checkInManager
+            )
+            focusBoardVM.syncManager = syncMgr
+            self.focusBoardVM = focusBoardVM
+
+            let chatViewModel = ChatViewModel(
                 llmClient: LLMClient(),
                 actionExecutor: actionExecutor,
                 projectRepo: projectRepo,
@@ -183,13 +307,19 @@ struct ContentView: View {
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo,
                 checkInRepo: checkInRepo,
-                conversationRepo: conversationRepo
+                conversationRepo: conversationRepo,
+                contextAssembler: ContextAssembler(knowledgeBase: kbManager)
             )
+            chatViewModel.aiTrustLevel = settingsManager.aiTrustLevel
+            chatViewModel.returnBriefingThresholdDays = settingsManager.returnBriefingThresholdDays
+            self.chatVM = chatViewModel
 
-            self.quickCaptureVM = QuickCaptureViewModel(
+            let quickCaptureVM = QuickCaptureViewModel(
                 projectRepo: projectRepo,
                 categoryRepo: categoryRepo
             )
+            quickCaptureVM.syncManager = syncMgr
+            self.quickCaptureVM = quickCaptureVM
 
             self.crossProjectRoadmapVM = CrossProjectRoadmapViewModel(
                 projectRepo: projectRepo,
@@ -197,25 +327,52 @@ struct ContentView: View {
                 milestoneRepo: milestoneRepo
             )
 
+            // Initialize export service
+            let exportBackend = FileExportBackend()
+            let exportDir = dbDir.appendingPathComponent("exports", isDirectory: true)
+            try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+            let exportConfig = ExportConfig(
+                destination: .jsonFile,
+                filePath: exportDir.appendingPathComponent("export.json").path
+            )
+            self.exportService = ExportService(backend: exportBackend, config: exportConfig)
+
             // Initialize notification manager
+            // Read live from UserDefaults so mid-session settings changes take effect.
+            // UserDefaults is Sendable/thread-safe, unlike @MainActor SettingsManager.
             let delivery = UNNotificationDelivery()
-            let maxDaily = settingsManager.maxDailyNotifications
-            let quietStart = settingsManager.quietHoursStart
-            let quietEnd = settingsManager.quietHoursEnd
+            let notifDefaults = UserDefaults.standard
             let notifManager = NotificationManager(
                 delivery: delivery,
                 preferences: {
-                    NotificationPreferences(
-                        maxDailyCount: maxDaily,
-                        quietHoursStart: quietStart,
-                        quietHoursEnd: quietEnd
+                    var types = Set<NotificationType>()
+                    if notifDefaults.bool(forKey: "settings.notificationsEnabled") {
+                        if notifDefaults.bool(forKey: "settings.notifyWaitingCheckBack") { types.insert(.waitingCheckBack) }
+                        if notifDefaults.bool(forKey: "settings.notifyDeadlineApproaching") { types.insert(.deadlineApproaching) }
+                        if notifDefaults.bool(forKey: "settings.notifyCheckInReminder") { types.insert(.checkInReminder) }
+                        if notifDefaults.bool(forKey: "settings.notifyPhaseCompletion") { types.insert(.phaseCompletion) }
+                    }
+                    return NotificationPreferences(
+                        enabledTypes: types,
+                        maxDailyCount: max(1, notifDefaults.integer(forKey: "settings.maxDailyNotifications")),
+                        quietHoursStart: notifDefaults.integer(forKey: "settings.quietHoursStart"),
+                        quietHoursEnd: notifDefaults.integer(forKey: "settings.quietHoursEnd")
                     )
                 }
             )
             self.notificationManager = notifManager
 
+            // Wire notification manager into managers/VMs
+            checkInManager.notificationManager = notifManager
+            focusBoardVM.notificationManager = notifManager
+
             // Request notification authorization
             _ = try? await notifManager.requestAuthorization()
+
+            // Start periodic sync if enabled
+            if settingsManager.syncEnabled {
+                syncMgr.startPeriodicSync()
+            }
 
             Log.ui.info("Database initialized at \(dbPath)")
         } catch {

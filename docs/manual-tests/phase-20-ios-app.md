@@ -1,30 +1,118 @@
 # Phase 20: iOS App — Manual Test Brief
 
 ## Automated Tests
-- **0 tests** — This phase is structural/navigation code with no dedicated test suite. Verification is manual.
+- **0 new tests** — This phase is structural/navigation code with no dedicated test suite. Verification is manual.
+- All existing **579 tests** pass across all 6 packages (no regressions from iOS target addition or platform guards).
 
 ### Suites
-_No new test suites. This phase introduces platform-adaptive navigation and the iOS app entry point._
+_No new test suites. This phase introduces platform-adaptive navigation, the iOS app entry point, and the iOS Xcode target._
 
 ## Manual Verification Checklist
-- [ ] iOS app launches successfully and displays the iOSContentView with tab navigation
+
+### iOS App Launch & Initialisation
+- [ ] iOS app launches successfully in Simulator (iPhone 16)
+- [ ] Database initialises without error (no "Failed to Initialize" screen)
+- [ ] All ViewModels initialise (Focus Board, Projects, AI Chat, Quick Capture, Settings load)
+- [ ] Notification authorisation prompt appears on first launch
+- [ ] Widget shared data (project count, focused project name) is written on init
+
+### Tab Navigation
 - [ ] Tab bar shows all 5 tabs: Focus Board, Projects, AI Chat, Quick Capture, and More
 - [ ] Each tab navigates to its corresponding view when tapped
 - [ ] Tab selection state persists correctly when switching between tabs
 - [ ] Tab items use .tabItem/.tag for iOS 17 compatibility (no iOS 18-only APIs)
+- [ ] Navigation between tabs does not lose view state (e.g., scroll position in Projects)
+
+### Deep Link Navigation
+- [ ] Opening `projectmanager://quickcapture` switches to Quick Capture tab
+- [ ] Opening `projectmanager://focusboard` switches to Focus Board tab
+- [ ] Opening `projectmanager://projects` switches to Projects tab
+- [ ] Opening `projectmanager://chat` switches to AI Chat tab
+- [ ] URL scheme is registered in Info.plist (CFBundleURLTypes)
+
+### iOS Wiring Parity
+- [ ] Focus Board loads without CancellationError
+- [ ] Check-in flow uses settings thresholds (gentle/moderate/prominent/deferred)
+- [ ] AI Chat respects aiTrustLevel from settings
+- [ ] AI Chat respects returnBriefingThresholdDays from settings
+- [ ] Cross-Project Roadmap view is accessible (More tab or navigation)
+- [ ] Export section shows "Export Now" button (ExportService wired)
+- [ ] Settings controls (steppers, toggles) respond to interaction
+- [ ] Sync toggle in settings enables/disables periodic sync
+- [ ] All repositories retained (categoryRepo, checkInRepo, conversationRepo stored as @State)
+
+### Sync Change Tracking (iOS)
+- [ ] Creating a project via Quick Capture triggers sync tracking
+- [ ] Creating a project via Onboarding triggers sync tracking
+- [ ] Focusing/unfocusing a project triggers sync tracking
+- [ ] AI-executed actions (via ActionExecutor) trigger sync tracking
+- [ ] Project browser create/update/delete triggers sync tracking
+
+### Platform-Adaptive Views
 - [ ] AdaptiveNavigationView renders IOSTabNavigationView on iOS
 - [ ] AdaptiveNavigationView renders AppNavigationView on macOS
 - [ ] DocumentEditorView uses HSplitView on macOS via #if os(macOS) conditional
 - [ ] DocumentEditorView falls back to simple list layout on iOS
-- [ ] macOS app continues to function correctly with AdaptiveNavigationView in place
-- [ ] Navigation between tabs does not lose view state (e.g., scroll position in Projects)
+- [ ] ChatView message bubbles use Color(.systemGray6) on iOS (not macOS controlBackgroundColor)
+- [ ] All sheet/modal frames use adaptive sizing (no 500px fixed widths on iPhone)
+- [ ] Focus Board Kanban columns scroll horizontally on iPhone (not cramped three-column)
+
+### Project Detail Navigation
+- [ ] Tapping a project in Focus Board navigates to ProjectDetailView
+- [ ] Tapping a project in Project Browser navigates to ProjectDetailView
+- [ ] Project detail shows phases, milestones, tasks, subtasks
+- [ ] Roadmap tab works in project detail
+- [ ] Documents tab works in project detail
+- [ ] Back navigation returns to the list view
+- [ ] Detail VM caching preserves expansion state across re-navigation
+
+### macOS Regression
+- [ ] macOS app continues to function correctly (no regressions from platform guards)
+- [ ] macOS sidebar navigation still works with all 6 sections
+- [ ] All sheet modals retain their minimum sizes on macOS
+
+### Quick Capture Widget
+- [ ] QuickCaptureWidgetExtension target exists and builds without errors
+- [ ] Widget has @main entry point (QuickCaptureWidgetBundle)
+- [ ] Widget entitlements include app group (group.com.projectmanager.shared)
+- [ ] iOS app entitlements include matching app group
+- [ ] Widget small view shows Quick Capture button with deep link
+- [ ] Widget medium view shows Capture and Focus Board buttons
+- [ ] Widget reads project count and focused project name from shared UserDefaults
+- [ ] Widget timeline refreshes every 30 minutes
+
+### Entitlements
+- [ ] macOS: app-sandbox, network.client, iCloud/CloudKit, audio-input
+- [ ] iOS: app group, iCloud/CloudKit, ubiquity-kvstore, aps-environment
+- [ ] Widget: app group (group.com.projectmanager.shared)
 
 ## Files Created/Modified
-### New Files
-- `Packages/PMFeatures/Sources/PMFeatures/Navigation/iOSTabNavigation.swift` — 5-tab TabView (Focus Board, Projects, AI Chat, Quick Capture, More) using .tabItem/.tag for iOS 17 compatibility
-- `Packages/PMFeatures/Sources/PMFeatures/Navigation/AdaptiveNavigationView.swift` — Platform-adaptive navigation: AppNavigationView on macOS, IOSTabNavigationView on iOS
-- `ProjectManageriOS/Sources/ProjectManageriOSApp.swift` — iOS app entry point
-- `ProjectManageriOS/Sources/iOSContentView.swift` — iOS content view with tab navigation
 
-### Modified Files
-- `Packages/PMFeatures/Sources/PMFeatures/Documents/DocumentEditorView.swift` — Added #if os(macOS) for HSplitView with simple list fallback on iOS
+### New Files
+- `ProjectManageriOS/ProjectManageriOS.entitlements` — iOS entitlements (iCloud, CloudKit, aps-environment, app group)
+- `ProjectManageriOS/QuickCaptureWidgetExtension.entitlements` — Widget entitlements (app group)
+- `ProjectManageriOS/Info.plist` — Generated by XcodeGen with URL scheme (projectmanager://)
+
+### Modified Files (audit fixes)
+- `project.yml` — Added ProjectManageriOS target, QuickCaptureWidgetExtension target with entitlements, URL scheme via Info.plist
+- `ProjectManageriOS/Sources/iOSContentView.swift` — Full wiring parity: all repos retained as @State, deep link handler, widget data update, selected tab binding
+- `ProjectManager/Sources/ContentView.swift` — Fixed ActionExecutor onChangeTracked to use Task { @MainActor in } wrapper
+- `Packages/PMFeatures/Sources/PMFeatures/Chat/ChatView.swift` — #if os(macOS) guard for background color
+- `Packages/PMFeatures/Sources/PMFeatures/Navigation/iOSTabNavigation.swift` — selectedTab exposed as Binding for deep link control
+- `Packages/PMFeatures/Sources/PMFeatures/Navigation/AdaptiveNavigationView.swift` — Updated for selectedTab binding
+- `Packages/PMFeatures/Sources/PMFeatures/FocusBoard/FocusBoardView.swift` — Horizontal scroll Kanban on iOS, #if os(macOS) for sheet frame
+- `Packages/PMFeatures/Sources/PMFeatures/ProjectDetail/RoadmapView.swift` — #if os(macOS) for 3 sheet frame constraints
+- `Packages/PMFeatures/Sources/PMFeatures/ProjectDetail/ProjectDetailView.swift` — #if os(macOS) for sheet frame
+- `Packages/PMFeatures/Sources/PMFeatures/QuickCapture/QuickCaptureView.swift` — #if os(macOS) for frame width
+- `Packages/PMFeatures/Sources/PMFeatures/ProjectBrowser/ProjectCreateSheet.swift` — #if os(macOS) for frame
+- `Packages/PMFeatures/Sources/PMFeatures/ProjectBrowser/ProjectEditSheet.swift` — #if os(macOS) for frame
+- `Packages/PMFeatures/Sources/PMFeatures/ProjectBrowser/ProjectBrowserView.swift` — #if os(macOS) for 2 sheet frames
+- `ProjectManageriOS/Sources/Widget/QuickCaptureWidget.swift` — Added @main WidgetBundle entry point
+
+### Pre-existing Files (from original Phase 20 implementation)
+- `Packages/PMFeatures/Sources/PMFeatures/Navigation/iOSTabNavigation.swift` — 5-tab TabView
+- `Packages/PMFeatures/Sources/PMFeatures/Navigation/AdaptiveNavigationView.swift` — Platform-adaptive navigation
+- `ProjectManageriOS/Sources/ProjectManageriOSApp.swift` — iOS app entry point
+- `ProjectManageriOS/Sources/iOSContentView.swift` — iOS content view
+- `Packages/PMFeatures/Sources/PMFeatures/Documents/DocumentEditorView.swift` — #if os(macOS) for HSplitView
+- `ProjectManageriOS/Sources/Widget/QuickCaptureWidget.swift` — Widget timeline provider and views

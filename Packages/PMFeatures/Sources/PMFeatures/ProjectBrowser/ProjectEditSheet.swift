@@ -146,6 +146,8 @@ struct ProjectEditSheet: View {
                 Text("This will permanently delete \"\(project.name)\" and all its contents.")
             }
         }
+        #if os(macOS)
         .frame(minWidth: 400, minHeight: 400)
+        #endif
     }
 }

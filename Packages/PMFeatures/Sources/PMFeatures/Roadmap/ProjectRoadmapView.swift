@@ -62,14 +62,35 @@ public struct ProjectRoadmapView: View {
 
     // MARK: - Timeline
 
+    @State private var itemPositions: [UUID: CGFloat] = [:]
+
     private var timelineContent: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(viewModel.items) { item in
                     RoadmapItemRow(item: item, viewModel: viewModel)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: RoadmapPositionKey.self,
+                                    value: [item.id: geo.frame(in: .named("roadmapTimeline")).midY]
+                                )
+                            }
+                        )
                 }
             }
             .padding()
+            .overlay(alignment: .topLeading) {
+                DependencyArrowsOverlay(
+                    dependencyTargets: viewModel.dependencyTargets,
+                    itemPositions: itemPositions,
+                    items: viewModel.items
+                )
+            }
+            .coordinateSpace(name: "roadmapTimeline")
+            .onPreferenceChange(RoadmapPositionKey.self) { positions in
+                itemPositions = positions
+            }
         }
     }
 }
@@ -202,6 +223,8 @@ struct RoadmapItemRow: View {
                 // Progress
                 if item.kind != .task {
                     PMProgressLabel(progress: item.progress, style: .percent)
+                } else if item.progress > 0 && item.progress < 1 {
+                    PMProgressLabel(progress: item.progress, style: .percent)
                 }
             }
 
@@ -224,6 +247,73 @@ struct RoadmapItemRow: View {
         case .milestone: .caption
         case .task: .caption2
         }
+    }
+}
+
+// MARK: - Position Preference Key
+
+struct RoadmapPositionKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: [UUID: CGFloat] = [:]
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+// MARK: - Dependency Arrows Overlay
+
+struct DependencyArrowsOverlay: View {
+    let dependencyTargets: [UUID: [UUID]]
+    let itemPositions: [UUID: CGFloat]
+    let items: [RoadmapItem]
+
+    var body: some View {
+        Canvas { context, size in
+            for (targetId, sourceIds) in dependencyTargets {
+                guard let targetY = itemPositions[targetId] else { continue }
+
+                for sourceId in sourceIds {
+                    guard let sourceY = itemPositions[sourceId] else { continue }
+                    let sourceItem = items.first { $0.id == sourceId }
+                    let isUnmet = sourceItem.map { $0.status != .completed } ?? false
+
+                    // Arrow drawn in the left margin area
+                    let x: CGFloat = 10
+                    let arrowColor = isUnmet ? Color.orange : Color.green.opacity(0.6)
+
+                    // Draw curved connecting line
+                    var path = Path()
+                    path.move(to: CGPoint(x: x, y: sourceY))
+                    let midY = (sourceY + targetY) / 2
+                    path.addCurve(
+                        to: CGPoint(x: x, y: targetY),
+                        control1: CGPoint(x: x - 14, y: midY - (targetY - sourceY) * 0.1),
+                        control2: CGPoint(x: x - 14, y: midY + (targetY - sourceY) * 0.1)
+                    )
+
+                    context.stroke(
+                        path,
+                        with: .color(arrowColor),
+                        style: StrokeStyle(lineWidth: 1.5, dash: isUnmet ? [4, 3] : [])
+                    )
+
+                    // Arrow head at target
+                    var arrowHead = Path()
+                    arrowHead.move(to: CGPoint(x: x - 4, y: targetY - 4))
+                    arrowHead.addLine(to: CGPoint(x: x, y: targetY))
+                    arrowHead.addLine(to: CGPoint(x: x - 4, y: targetY + 4))
+                    context.stroke(
+                        arrowHead,
+                        with: .color(arrowColor),
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+                    )
+
+                    // Small dot at source
+                    let dotRect = CGRect(x: x - 3, y: sourceY - 3, width: 6, height: 6)
+                    context.fill(Circle().path(in: dotRect), with: .color(arrowColor))
+                }
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 

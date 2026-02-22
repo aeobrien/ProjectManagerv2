@@ -21,6 +21,21 @@ final class MockDocumentRepository: DocumentRepositoryProtocol, @unchecked Senda
     func search(query: String) async throws -> [Document] { documents.filter { $0.title.contains(query) || $0.content.contains(query) } }
 }
 
+// MARK: - Mock Document Version Repository
+
+final class MockDocumentVersionRepository: DocumentVersionRepositoryProtocol, @unchecked Sendable {
+    var versions: [DocumentVersion] = []
+    func fetchAll(forDocument documentId: UUID) async throws -> [DocumentVersion] {
+        versions.filter { $0.documentId == documentId }.sorted { $0.version > $1.version }
+    }
+    func save(_ version: DocumentVersion) async throws {
+        versions.append(version)
+    }
+    func deleteAll(forDocument documentId: UUID) async throws {
+        versions.removeAll { $0.documentId == documentId }
+    }
+}
+
 // MARK: - Onboarding Test Helper
 
 private let obCatId = UUID()
@@ -173,7 +188,7 @@ struct OnboardingFlowManagerTests {
         client.responseText = "Simple project, no actions."
         let (manager, _, projectRepo, _, _, _, _) = makeOnboardingManager(llmClient: client)
 
-        var ideaProject = Project(name: "Idea", categoryId: obCatId, lifecycleState: .idea)
+        let ideaProject = Project(name: "Idea", categoryId: obCatId, lifecycleState: .idea)
         projectRepo.projects = [ideaProject]
         manager.sourceProject = ideaProject
         manager.brainDumpText = "Expand on this idea"
@@ -243,5 +258,221 @@ struct OnboardingFlowManagerTests {
     func flowStepEquality() {
         #expect(OnboardingFlowManager.FlowStep.brainDump == OnboardingFlowManager.FlowStep.brainDump)
         #expect(OnboardingFlowManager.FlowStep.brainDump != OnboardingFlowManager.FlowStep.completed)
+    }
+
+    // MARK: - Complexity Assessment
+
+    @Test("Complexity medium with 5+ tasks")
+    @MainActor
+    func complexityMedium() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        // 5 tasks → medium complexity
+        var actions = "[ACTION: CREATE_MILESTONE] phaseId: \(msId)\nname: MS1 [/ACTION]"
+        for i in 1...5 {
+            actions += " [ACTION: CREATE_TASK] milestoneId: \(UUID())\nname: Task \(i)\npriority: normal [/ACTION]"
+        }
+        client.responseText = "Here's the plan. \(actions)"
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Medium project"
+
+        await manager.startDiscovery()
+
+        #expect(manager.proposedComplexity == .medium)
+        #expect(manager.proposedItems.filter { $0.kind == .task }.count == 5)
+    }
+
+    @Test("Complexity complex with 10+ tasks")
+    @MainActor
+    func complexityComplex() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        var actions = "[ACTION: CREATE_MILESTONE] phaseId: \(msId)\nname: MS1 [/ACTION]"
+        for i in 1...10 {
+            actions += " [ACTION: CREATE_TASK] milestoneId: \(UUID())\nname: Task \(i)\npriority: normal [/ACTION]"
+        }
+        client.responseText = "Complex plan. \(actions)"
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Complex project"
+
+        await manager.startDiscovery()
+
+        #expect(manager.proposedComplexity == .complex)
+    }
+
+    // MARK: - Document Generation
+
+    @Test("Generate documents creates vision statement")
+    @MainActor
+    func generateDocumentsVision() async {
+        let client = MockLLMClient()
+        client.responseText = "No actions."
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Build a todo app"
+        await manager.startDiscovery()
+
+        // Now generate documents
+        client.responseText = "This is the vision statement for the project."
+        await manager.generateDocuments()
+
+        #expect(manager.generatedVision != nil)
+        #expect(manager.generatedVision == "This is the vision statement for the project.")
+    }
+
+    @Test("Generate documents creates tech brief for complex")
+    @MainActor
+    func generateDocumentsTechBrief() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        // 10 tasks → complex
+        var actions = "[ACTION: CREATE_MILESTONE] phaseId: \(msId)\nname: MS1 [/ACTION]"
+        for i in 1...10 {
+            actions += " [ACTION: CREATE_TASK] milestoneId: \(UUID())\nname: T\(i)\npriority: normal [/ACTION]"
+        }
+        client.responseText = "Plan. \(actions)"
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Big project"
+        await manager.startDiscovery()
+        #expect(manager.proposedComplexity == .complex)
+
+        // Generate documents — first call returns vision, second returns brief
+        client.responseText = "Vision content"
+        await manager.generateDocuments()
+
+        #expect(manager.generatedVision != nil)
+        #expect(manager.generatedTechBrief != nil)
+    }
+
+    @Test("Create project saves documents for medium complexity")
+    @MainActor
+    func createProjectSavesDocuments() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        // 5 tasks → medium complexity
+        var actions = "[ACTION: CREATE_MILESTONE] phaseId: \(msId)\nname: MS1 [/ACTION]"
+        for i in 1...5 {
+            actions += " [ACTION: CREATE_TASK] milestoneId: \(UUID())\nname: T\(i)\npriority: normal [/ACTION]"
+        }
+        client.responseText = "Plan. \(actions)"
+        let (manager, _, _, _, _, _, docRepo) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Medium project"
+        await manager.startDiscovery()
+        #expect(manager.proposedComplexity == .medium)
+
+        // generateDocuments will be called automatically during createProject
+        client.responseText = "Generated vision statement"
+        await manager.createProject(name: "MediumApp", categoryId: obCatId, definitionOfDone: nil)
+
+        #expect(manager.step == .completed)
+        let visionDocs = docRepo.documents.filter { $0.type == .visionStatement }
+        #expect(visionDocs.count == 1)
+        #expect(visionDocs.first?.content == "Generated vision statement")
+    }
+
+    // MARK: - Task Attributes
+
+    @Test("Tasks extract priority and effort from actions")
+    @MainActor
+    func taskAttributesExtracted() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        let taskMsId = UUID()
+        client.responseText = "[ACTION: CREATE_MILESTONE] phaseId: \(msId)\nname: Build [/ACTION] [ACTION: CREATE_TASK] milestoneId: \(taskMsId)\nname: Setup\npriority: high\neffortType: deepFocus [/ACTION]"
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Test"
+
+        await manager.startDiscovery()
+
+        let taskItem = manager.proposedItems.first { $0.kind == .task }
+        #expect(taskItem != nil)
+        #expect(taskItem?.name == "Setup")
+        #expect(taskItem?.priority == .high)
+        #expect(taskItem?.effortType == .deepFocus)
+    }
+
+    @Test("Tasks parented under correct milestone")
+    @MainActor
+    func taskParenting() async {
+        let client = MockLLMClient()
+        let ms1Id = UUID()
+        let ms2Id = UUID()
+        let tId = UUID()
+        client.responseText = "[ACTION: CREATE_MILESTONE] phaseId: \(ms1Id)\nname: Design [/ACTION] [ACTION: CREATE_MILESTONE] phaseId: \(ms2Id)\nname: Build [/ACTION] [ACTION: CREATE_TASK] milestoneId: \(tId)\nname: Wire UI\npriority: normal [/ACTION]"
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Test"
+
+        await manager.startDiscovery()
+
+        let taskItem = manager.proposedItems.first { $0.kind == .task }
+        #expect(taskItem?.parentName == "Build") // Last milestone before this task
+    }
+
+    // MARK: - Hierarchy Creation
+
+    @Test("Create hierarchy distributes tasks across milestones")
+    @MainActor
+    func hierarchyDistribution() async {
+        let client = MockLLMClient()
+        let id1 = UUID()
+        let id2 = UUID()
+        let tId1 = UUID()
+        let tId2 = UUID()
+        // Two milestones, two tasks — first task after first milestone, second task after second milestone
+        client.responseText = "[ACTION: CREATE_MILESTONE] phaseId: \(id1)\nname: Alpha [/ACTION] [ACTION: CREATE_TASK] milestoneId: \(tId1)\nname: Task A\npriority: normal [/ACTION] [ACTION: CREATE_MILESTONE] phaseId: \(id2)\nname: Beta [/ACTION] [ACTION: CREATE_TASK] milestoneId: \(tId2)\nname: Task B\npriority: normal [/ACTION]"
+        let (manager, _, _, _, milestoneRepo, taskRepo, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Multi-milestone project"
+        await manager.startDiscovery()
+
+        await manager.createProject(name: "Dist Test", categoryId: obCatId, definitionOfDone: nil)
+
+        #expect(milestoneRepo.milestones.count == 2)
+        #expect(taskRepo.tasks.count == 2)
+
+        // Task A should be under Alpha, Task B under Beta
+        let alphaMs = milestoneRepo.milestones.first { $0.name == "Alpha" }
+        let betaMs = milestoneRepo.milestones.first { $0.name == "Beta" }
+        let taskA = taskRepo.tasks.first { $0.name == "Task A" }
+        let taskB = taskRepo.tasks.first { $0.name == "Task B" }
+        #expect(taskA?.milestoneId == alphaMs?.id)
+        #expect(taskB?.milestoneId == betaMs?.id)
+    }
+
+    @Test("Create hierarchy creates default phase and milestone when needed")
+    @MainActor
+    func hierarchyDefaults() async {
+        let client = MockLLMClient()
+        let tId = UUID()
+        // Only tasks, no milestones or phases
+        client.responseText = "[ACTION: CREATE_TASK] milestoneId: \(tId)\nname: Solo Task\npriority: normal [/ACTION]"
+        let (manager, _, _, phaseRepo, milestoneRepo, taskRepo, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Simple project"
+        await manager.startDiscovery()
+
+        await manager.createProject(name: "Defaults", categoryId: obCatId, definitionOfDone: nil)
+
+        #expect(phaseRepo.phases.count == 1)
+        #expect(phaseRepo.phases.first?.name == "Phase 1")
+        #expect(milestoneRepo.milestones.count == 1)
+        #expect(milestoneRepo.milestones.first?.name == "Milestone 1")
+        #expect(taskRepo.tasks.count == 1)
+    }
+
+    @Test("Task attributes propagate to created PMTask")
+    @MainActor
+    func taskAttributesPropagate() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        let tId = UUID()
+        client.responseText = "[ACTION: CREATE_MILESTONE] phaseId: \(msId)\nname: Build [/ACTION] [ACTION: CREATE_TASK] milestoneId: \(tId)\nname: Setup DB\npriority: high\neffortType: deepFocus [/ACTION]"
+        let (manager, _, _, _, _, taskRepo, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Test"
+        await manager.startDiscovery()
+
+        await manager.createProject(name: "AttrTest", categoryId: obCatId, definitionOfDone: nil)
+
+        let task = taskRepo.tasks.first { $0.name == "Setup DB" }
+        #expect(task != nil)
+        #expect(task?.priority == .high)
+        #expect(task?.effortType == .deepFocus)
     }
 }

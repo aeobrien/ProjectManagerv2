@@ -14,6 +14,19 @@ public enum AIAction: Sendable, Equatable {
     case createMilestone(phaseId: UUID, name: String)
     case createTask(milestoneId: UUID, name: String, priority: Priority, effortType: EffortType?)
     case createDocument(projectId: UUID, title: String, content: String)
+
+    /// Whether this action is considered "major" (requires confirmation even at high trust level).
+    /// Minor actions: completing tasks, creating subtasks, incrementing deferred, scope suggestions.
+    /// Major actions: creating milestones/tasks/documents, updating notes/documents, blocking/waiting.
+    public var isMajor: Bool {
+        switch self {
+        case .completeTask, .createSubtask, .incrementDeferred, .suggestScopeReduction:
+            return false
+        case .updateNotes, .flagBlocked, .setWaiting, .updateDocument,
+             .createMilestone, .createTask, .createDocument:
+            return true
+        }
+    }
 }
 
 /// Result of parsing an AI response — natural language and structured actions.

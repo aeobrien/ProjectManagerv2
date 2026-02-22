@@ -1,5 +1,7 @@
 import Foundation
+import PMData
 import PMDomain
+import PMServices
 import PMUtilities
 import os
 
@@ -21,16 +23,31 @@ public final class DocumentViewModel {
     public var editingTitle: String = ""
     public private(set) var hasUnsavedChanges = false
 
+    /// Version history for the currently selected document.
+    public private(set) var versionHistory: [DocumentVersion] = []
+
     // MARK: - Dependencies
 
     private let projectId: UUID
     private let documentRepo: DocumentRepositoryProtocol
+    private let versionRepo: DocumentVersionRepositoryProtocol?
+    private let knowledgeBaseManager: KnowledgeBaseManager?
+
+    /// Optional sync manager for tracking document changes.
+    public var syncManager: SyncManager?
 
     // MARK: - Init
 
-    public init(projectId: UUID, documentRepo: DocumentRepositoryProtocol) {
+    public init(
+        projectId: UUID,
+        documentRepo: DocumentRepositoryProtocol,
+        versionRepo: DocumentVersionRepositoryProtocol? = nil,
+        knowledgeBaseManager: KnowledgeBaseManager? = nil
+    ) {
         self.projectId = projectId
         self.documentRepo = documentRepo
+        self.versionRepo = versionRepo
+        self.knowledgeBaseManager = knowledgeBaseManager
     }
 
     // MARK: - Loading
@@ -47,12 +64,68 @@ public final class DocumentViewModel {
 
     // MARK: - Selection
 
-    /// Select a document for editing.
+    /// Select a document for editing. Auto-saves the previous document if it has changes.
     public func select(_ document: Document) {
+        // Capture and save previous document synchronously before switching
+        if hasUnsavedChanges, var oldDoc = selectedDocument {
+            let newTitle = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !newTitle.isEmpty {
+                oldDoc.title = newTitle
+                oldDoc.content = editingContent
+                oldDoc.updatedAt = Date()
+                let docToSave = oldDoc
+                // Update in list immediately
+                if let idx = documents.firstIndex(where: { $0.id == docToSave.id }) {
+                    documents[idx] = docToSave
+                }
+                Task {
+                    do {
+                        try await documentRepo.save(docToSave)
+                        Log.ui.debug("Auto-saved document '\(newTitle)' (no version bump)")
+                    } catch {
+                        Log.ui.error("Auto-save failed: \(error)")
+                    }
+                }
+            }
+        }
         selectedDocument = document
         editingContent = document.content
         editingTitle = document.title
         hasUnsavedChanges = false
+
+        // Load version history
+        Task {
+            await loadVersionHistory(for: document.id)
+        }
+    }
+
+    /// Deselect the current document (auto-saves if needed).
+    public func deselect() {
+        if hasUnsavedChanges, var oldDoc = selectedDocument {
+            let newTitle = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !newTitle.isEmpty {
+                oldDoc.title = newTitle
+                oldDoc.content = editingContent
+                oldDoc.updatedAt = Date()
+                let docToSave = oldDoc
+                if let idx = documents.firstIndex(where: { $0.id == docToSave.id }) {
+                    documents[idx] = docToSave
+                }
+                Task {
+                    do {
+                        try await documentRepo.save(docToSave)
+                        Log.ui.debug("Auto-saved document '\(newTitle)' on deselect (no version bump)")
+                    } catch {
+                        Log.ui.error("Auto-save on deselect failed: \(error)")
+                    }
+                }
+            }
+        }
+        selectedDocument = nil
+        editingContent = ""
+        editingTitle = ""
+        hasUnsavedChanges = false
+        versionHistory = []
     }
 
     /// Mark content as changed.
@@ -63,7 +136,7 @@ public final class DocumentViewModel {
 
     // MARK: - Save
 
-    /// Save the current editing state.
+    /// Save the current editing state, bump the version number, and snapshot the previous version.
     public func save() async {
         guard var doc = selectedDocument else { return }
 
@@ -75,16 +148,27 @@ public final class DocumentViewModel {
             return
         }
 
-        // Increment version if content changed
-        if newContent != doc.content {
-            doc.version += 1
-        }
+        // Snapshot the current (pre-save) version before overwriting
+        let snapshot = DocumentVersion(
+            documentId: doc.id,
+            version: doc.version,
+            title: doc.title,
+            content: doc.content,
+            savedAt: doc.updatedAt
+        )
 
+        // Always increment version on explicit save
+        doc.version += 1
         doc.title = newTitle
         doc.content = newContent
         doc.updatedAt = Date()
 
         do {
+            // Save the version snapshot
+            if let versionRepo {
+                try await versionRepo.save(snapshot)
+            }
+
             try await documentRepo.save(doc)
             selectedDocument = doc
 
@@ -94,10 +178,52 @@ public final class DocumentViewModel {
             }
 
             hasUnsavedChanges = false
+
+            // Reload version history
+            await loadVersionHistory(for: doc.id)
+
+            syncManager?.trackChange(entityType: .document, entityId: doc.id, changeType: .update)
+
+            // Index document content in knowledge base
+            if let kb = knowledgeBaseManager {
+                let docToIndex = doc
+                Task.detached {
+                    do {
+                        try await kb.indexDocument(docToIndex)
+                    } catch {
+                        Log.ai.error("Failed to index document in KB: \(error)")
+                    }
+                }
+            }
+
             Log.ui.info("Saved document '\(newTitle)' v\(doc.version)")
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // MARK: - Version History
+
+    /// Load version history for a document.
+    public func loadVersionHistory(for documentId: UUID) async {
+        guard let versionRepo else {
+            versionHistory = []
+            return
+        }
+        do {
+            versionHistory = try await versionRepo.fetchAll(forDocument: documentId)
+        } catch {
+            Log.ui.error("Failed to load version history: \(error)")
+            versionHistory = []
+        }
+    }
+
+    /// Restore a document to a previous version.
+    public func restoreVersion(_ version: DocumentVersion) {
+        guard selectedDocument != nil else { return }
+        editingTitle = version.title
+        editingContent = version.content
+        markEdited()
     }
 
     // MARK: - Create
@@ -107,6 +233,7 @@ public final class DocumentViewModel {
         let doc = Document(projectId: projectId, type: type, title: title)
         do {
             try await documentRepo.save(doc)
+            syncManager?.trackChange(entityType: .document, entityId: doc.id, changeType: .create)
             documents.append(doc)
             select(doc)
             Log.ui.info("Created document '\(title)'")
@@ -121,12 +248,14 @@ public final class DocumentViewModel {
     public func deleteDocument(_ document: Document) async {
         do {
             try await documentRepo.delete(id: document.id)
+            syncManager?.trackChange(entityType: .document, entityId: document.id, changeType: .delete)
             documents.removeAll { $0.id == document.id }
             if selectedDocument?.id == document.id {
                 selectedDocument = nil
                 editingContent = ""
                 editingTitle = ""
                 hasUnsavedChanges = false
+                versionHistory = []
             }
         } catch {
             self.error = error.localizedDescription

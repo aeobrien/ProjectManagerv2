@@ -182,7 +182,7 @@ public struct CrossProjectRoadmapView: View {
                     .foregroundStyle(deadline < Date() && milestone.status != .completed ? .red : .secondary)
             }
 
-            Text(milestone.status.rawValue.capitalized)
+            Text(milestone.status.displayName)
                 .font(.caption2)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)

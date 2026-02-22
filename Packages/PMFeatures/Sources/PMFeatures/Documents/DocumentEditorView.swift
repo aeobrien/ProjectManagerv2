@@ -6,6 +6,7 @@ import PMDesignSystem
 public struct DocumentEditorView: View {
     @Bindable var viewModel: DocumentViewModel
     @State private var showMarkdownPreview = false
+    @State private var showVersionHistory = false
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -50,6 +51,15 @@ public struct DocumentEditorView: View {
                 #else
                 if viewModel.selectedDocument != nil {
                     editorPane
+                        .toolbar {
+                            ToolbarItem(placement: .navigation) {
+                                Button {
+                                    viewModel.deselect()
+                                } label: {
+                                    Label("Documents", systemImage: "chevron.left")
+                                }
+                            }
+                        }
                 } else {
                     documentList
                 }
@@ -125,7 +135,7 @@ public struct DocumentEditorView: View {
 
     private var editorPane: some View {
         VStack(spacing: 0) {
-            // Title bar
+            // Title bar — fixed height
             HStack {
                 TextField("Title", text: $viewModel.editingTitle)
                     .font(.title3)
@@ -154,6 +164,12 @@ public struct DocumentEditorView: View {
                 .toggleStyle(.button)
                 .help("Toggle Markdown Preview")
 
+                Toggle(isOn: $showVersionHistory) {
+                    Image(systemName: showVersionHistory ? "clock.fill" : "clock")
+                }
+                .toggleStyle(.button)
+                .help("Toggle Version History")
+
                 Button("Save") {
                     Task { await viewModel.save() }
                 }
@@ -170,14 +186,17 @@ public struct DocumentEditorView: View {
                 #if os(macOS)
                 HSplitView {
                     editorTextArea
-                    Divider()
+                        .frame(minWidth: 200, maxHeight: .infinity)
                     markdownPreview
+                        .frame(minWidth: 200, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 #else
                 markdownPreview
                 #endif
             } else {
                 editorTextArea
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if let error = viewModel.error {
@@ -186,7 +205,67 @@ public struct DocumentEditorView: View {
                     .foregroundStyle(.red)
                     .padding(.horizontal)
             }
+
+            if showVersionHistory {
+                versionHistoryPanel
+            }
         }
+    }
+
+    // MARK: - Version History
+
+    private var versionHistoryPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
+            HStack {
+                Image(systemName: "clock.arrow.circlepath")
+                Text("Version History")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            if viewModel.versionHistory.isEmpty {
+                Text("No previous versions")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(viewModel.versionHistory) { version in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("v\(version.version) — \(version.title)")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    Text(version.savedAt, style: .date)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Restore") {
+                                    viewModel.restoreVersion(version)
+                                }
+                                .font(.caption)
+                                .buttonStyle(.bordered)
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .frame(maxHeight: 150)
+            }
+        }
+        #if os(macOS)
+        .background(Color(nsColor: .controlBackgroundColor))
+        #else
+        .background(Color(.secondarySystemBackground))
+        #endif
     }
 
     // MARK: - Editor Text Area

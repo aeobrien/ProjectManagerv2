@@ -85,10 +85,20 @@ struct VoiceInputManagerTests {
         #expect(VoiceInputState.idle == VoiceInputState.idle)
         #expect(VoiceInputState.recording == VoiceInputState.recording)
         #expect(VoiceInputState.processing == VoiceInputState.processing)
+        #expect(VoiceInputState.requestingPermission == VoiceInputState.requestingPermission)
+        #expect(VoiceInputState.loadingModel == VoiceInputState.loadingModel)
         #expect(VoiceInputState.completed("hello") == VoiceInputState.completed("hello"))
         #expect(VoiceInputState.completed("hello") != VoiceInputState.completed("world"))
         #expect(VoiceInputState.error("err") == VoiceInputState.error("err"))
         #expect(VoiceInputState.idle != VoiceInputState.recording)
+        #expect(VoiceInputState.requestingPermission != VoiceInputState.loadingModel)
+    }
+
+    @Test("isLoadingModel computed property")
+    @MainActor
+    func isLoadingModel() {
+        let manager = VoiceInputManager()
+        #expect(manager.isLoadingModel == false)
     }
 
     @Test("canRecord true after error state")

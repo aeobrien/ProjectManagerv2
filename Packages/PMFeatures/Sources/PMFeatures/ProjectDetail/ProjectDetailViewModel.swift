@@ -1,5 +1,7 @@
 import Foundation
+import PMData
 import PMDomain
+import PMServices
 import PMUtilities
 import os
 
@@ -17,6 +19,26 @@ public final class ProjectDetailViewModel {
     public private(set) var dependencies: [Dependency] = []
     public private(set) var isLoading = false
     public private(set) var error: String?
+
+    /// Expansion state for the roadmap hierarchy — persisted across tab switches.
+    public var expandedPhases: Set<UUID> = []
+    public var expandedMilestones: Set<UUID> = []
+    public var expandedTasks: Set<UUID> = []
+
+    /// Phase that just completed all milestones and needs a retrospective.
+    public private(set) var phaseNeedingRetrospective: Phase?
+
+    /// Optional retrospective flow manager for phase completion detection.
+    public var retrospectiveManager: RetrospectiveFlowManager?
+
+    /// Optional knowledge base manager for incremental indexing of task notes.
+    public var knowledgeBaseManager: KnowledgeBaseManager?
+
+    /// Optional sync manager for tracking changes to CloudKit.
+    public var syncManager: SyncManager?
+
+    /// Optional notification manager for scheduling notifications.
+    public var notificationManager: NotificationManager?
 
     // MARK: - Dependencies
 
@@ -97,11 +119,42 @@ public final class ProjectDetailViewModel {
             }
 
             Log.ui.info("Loaded hierarchy for '\(self.project.name)': \(self.phases.count) phases")
+
+            // Check for phases needing retrospective
+            await checkForCompletedPhases()
         } catch {
             self.error = error.localizedDescription
             Log.ui.error("Failed to load project hierarchy: \(error)")
         }
         isLoading = false
+    }
+
+    /// Scan phases for one that has all milestones completed and no retrospective yet.
+    public func checkForCompletedPhases() async {
+        guard let manager = retrospectiveManager else { return }
+        phaseNeedingRetrospective = nil
+        for phase in phases {
+            if await manager.checkPhaseCompletion(phase) {
+                phaseNeedingRetrospective = phase
+                manager.promptRetrospective(for: phase)
+
+                // Schedule phase completion notification
+                if let nm = notificationManager {
+                    let notif = NotificationManager.phaseCompleted(
+                        phaseName: phase.name, projectName: project.name, phaseId: phase.id
+                    )
+                    _ = try? await nm.scheduleIfAllowed(notif)
+                }
+
+                Log.ui.info("Phase '\(phase.name)' needs retrospective")
+                break
+            }
+        }
+    }
+
+    /// Dismiss the retrospective prompt (user chose to skip or snooze was handled by the manager).
+    public func dismissRetrospectivePrompt() {
+        phaseNeedingRetrospective = nil
     }
 
     // MARK: - Phase CRUD
@@ -111,6 +164,7 @@ public final class ProjectDetailViewModel {
         let phase = Phase(projectId: project.id, name: name, sortOrder: sortOrder)
         do {
             try await phaseRepo.save(phase)
+            syncManager?.trackChange(entityType: .phase, entityId: phase.id, changeType: .create)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -118,6 +172,7 @@ public final class ProjectDetailViewModel {
     public func updatePhase(_ phase: Phase) async {
         do {
             try await phaseRepo.save(phase)
+            syncManager?.trackChange(entityType: .phase, entityId: phase.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -125,6 +180,7 @@ public final class ProjectDetailViewModel {
     public func deletePhase(_ phase: Phase) async {
         do {
             try await phaseRepo.delete(id: phase.id)
+            syncManager?.trackChange(entityType: .phase, entityId: phase.id, changeType: .delete)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -145,6 +201,7 @@ public final class ProjectDetailViewModel {
         let milestone = Milestone(phaseId: phaseId, name: name, sortOrder: existing.count, deadline: deadline, priority: priority)
         do {
             try await milestoneRepo.save(milestone)
+            syncManager?.trackChange(entityType: .milestone, entityId: milestone.id, changeType: .create)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -152,6 +209,7 @@ public final class ProjectDetailViewModel {
     public func updateMilestone(_ milestone: Milestone) async {
         do {
             try await milestoneRepo.save(milestone)
+            syncManager?.trackChange(entityType: .milestone, entityId: milestone.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -159,6 +217,7 @@ public final class ProjectDetailViewModel {
     public func deleteMilestone(_ milestone: Milestone) async {
         do {
             try await milestoneRepo.delete(id: milestone.id)
+            syncManager?.trackChange(entityType: .milestone, entityId: milestone.id, changeType: .delete)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -195,6 +254,7 @@ public final class ProjectDetailViewModel {
         )
         do {
             try await taskRepo.save(task)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .create)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -207,6 +267,20 @@ public final class ProjectDetailViewModel {
         }
         do {
             try await taskRepo.save(task)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
+
+            // Index task notes in knowledge base if present
+            if let kb = knowledgeBaseManager, task.notes != nil {
+                let projectId = project.id
+                Task.detached {
+                    do {
+                        try await kb.indexTaskNotes(projectId: projectId, task: task)
+                    } catch {
+                        Log.ai.error("Failed to index task notes in KB: \(error)")
+                    }
+                }
+            }
+
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -214,6 +288,7 @@ public final class ProjectDetailViewModel {
     public func deleteTask(_ task: PMTask) async {
         do {
             try await taskRepo.delete(id: task.id)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .delete)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -231,6 +306,7 @@ public final class ProjectDetailViewModel {
     public func blockTask(_ task: PMTask, type: BlockedType, reason: String) async {
         var updated = task
         updated.status = .blocked
+        updated.kanbanColumn = ItemStatus.blocked.kanbanColumn
         updated.blockedType = type
         updated.blockedReason = reason
         await updateTask(updated)
@@ -240,15 +316,23 @@ public final class ProjectDetailViewModel {
     public func waitTask(_ task: PMTask, reason: String, checkBackDate: Date?) async {
         var updated = task
         updated.status = .waiting
+        updated.kanbanColumn = ItemStatus.waiting.kanbanColumn
         updated.waitingReason = reason
         updated.waitingCheckBackDate = checkBackDate
         await updateTask(updated)
+
+        // Schedule waiting check-back notification
+        if let nm = notificationManager {
+            let notif = NotificationManager.waitingCheckBack(taskName: task.name, projectName: project.name, taskId: task.id)
+            _ = try? await nm.scheduleIfAllowed(notif)
+        }
     }
 
     /// Unblock a task, returning it to in-progress.
     public func unblockTask(_ task: PMTask) async {
         var updated = task
         updated.status = .inProgress
+        updated.kanbanColumn = ItemStatus.inProgress.kanbanColumn
         updated.blockedType = nil
         updated.blockedReason = nil
         updated.waitingReason = nil
@@ -263,6 +347,7 @@ public final class ProjectDetailViewModel {
         let subtask = Subtask(taskId: taskId, name: name, sortOrder: existing.count)
         do {
             try await subtaskRepo.save(subtask)
+            syncManager?.trackChange(entityType: .subtask, entityId: subtask.id, changeType: .create)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -272,6 +357,7 @@ public final class ProjectDetailViewModel {
         updated.isCompleted.toggle()
         do {
             try await subtaskRepo.save(updated)
+            syncManager?.trackChange(entityType: .subtask, entityId: updated.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -279,6 +365,7 @@ public final class ProjectDetailViewModel {
     public func updateSubtask(_ subtask: Subtask) async {
         do {
             try await subtaskRepo.save(subtask)
+            syncManager?.trackChange(entityType: .subtask, entityId: subtask.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -286,6 +373,7 @@ public final class ProjectDetailViewModel {
     public func deleteSubtask(_ subtask: Subtask) async {
         do {
             try await subtaskRepo.delete(id: subtask.id)
+            syncManager?.trackChange(entityType: .subtask, entityId: subtask.id, changeType: .delete)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -296,6 +384,7 @@ public final class ProjectDetailViewModel {
         let dep = Dependency(sourceType: sourceType, sourceId: sourceId, targetType: targetType, targetId: targetId)
         do {
             try await dependencyRepo.save(dep)
+            syncManager?.trackChange(entityType: .dependency, entityId: dep.id, changeType: .create)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -303,6 +392,7 @@ public final class ProjectDetailViewModel {
     public func removeDependency(_ dep: Dependency) async {
         do {
             try await dependencyRepo.delete(id: dep.id)
+            syncManager?.trackChange(entityType: .dependency, entityId: dep.id, changeType: .delete)
             await load()
         } catch { self.error = error.localizedDescription }
     }

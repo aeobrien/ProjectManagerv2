@@ -32,6 +32,10 @@ public struct AdaptiveNavigationView<
         self.settings = settings
     }
 
+    #if !os(macOS)
+    @State private var selectedTab: IOSTab = .focusBoard
+    #endif
+
     public var body: some View {
         #if os(macOS)
         AppNavigationView(
@@ -44,6 +48,7 @@ public struct AdaptiveNavigationView<
         )
         #else
         IOSTabNavigationView(
+            selectedTab: $selectedTab,
             focusBoard: focusBoard,
             projects: projects,
             aiChat: aiChat,

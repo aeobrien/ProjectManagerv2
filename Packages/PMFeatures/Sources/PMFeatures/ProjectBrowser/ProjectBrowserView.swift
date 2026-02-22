@@ -6,10 +6,19 @@ import PMDesignSystem
 public struct ProjectBrowserView: View {
     @Bindable var viewModel: ProjectBrowserViewModel
     var onSelectProject: ((Project) -> Void)?
+    var onboardingManager: OnboardingFlowManager?
+    var categories: [PMDomain.Category] { viewModel.categories }
 
-    public init(viewModel: ProjectBrowserViewModel, onSelectProject: ((Project) -> Void)? = nil) {
+    @State private var showOnboarding = false
+
+    public init(
+        viewModel: ProjectBrowserViewModel,
+        onSelectProject: ((Project) -> Void)? = nil,
+        onboardingManager: OnboardingFlowManager? = nil
+    ) {
         self.viewModel = viewModel
         self.onSelectProject = onSelectProject
+        self.onboardingManager = onboardingManager
     }
 
     public var body: some View {
@@ -21,10 +30,29 @@ public struct ProjectBrowserView: View {
         .navigationTitle("Projects")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    viewModel.isShowingCreateSheet = true
-                } label: {
-                    Label("New Project", systemImage: "plus")
+                if onboardingManager != nil {
+                    Menu {
+                        Button {
+                            viewModel.isShowingCreateSheet = true
+                        } label: {
+                            Label("Quick Create", systemImage: "plus")
+                        }
+                        Button {
+                            onboardingManager?.reset()
+                            onboardingManager?.sourceProject = nil
+                            showOnboarding = true
+                        } label: {
+                            Label("AI-Guided Onboarding", systemImage: "sparkles")
+                        }
+                    } label: {
+                        Label("New Project", systemImage: "plus")
+                    }
+                } else {
+                    Button {
+                        viewModel.isShowingCreateSheet = true
+                    } label: {
+                        Label("New Project", systemImage: "plus")
+                    }
                 }
             }
 
@@ -35,10 +63,34 @@ public struct ProjectBrowserView: View {
         .sheet(isPresented: $viewModel.isShowingCreateSheet) {
             ProjectCreateSheet(viewModel: viewModel)
         }
+        .sheet(isPresented: $showOnboarding) {
+            if let onboardingManager {
+                OnboardingView(manager: onboardingManager, categories: categories)
+                    #if os(macOS)
+                    .frame(minWidth: 500, minHeight: 500)
+                    #endif
+            }
+        }
         .sheet(isPresented: $viewModel.isShowingEditSheet) {
             if let project = viewModel.editingProject {
                 ProjectEditSheet(viewModel: viewModel, project: project)
             }
+        }
+        .sheet(isPresented: $viewModel.isShowingStateTransition) {
+            if let project = viewModel.editingProject, let target = viewModel.transitionTarget {
+                StateTransitionSheet(viewModel: viewModel, project: project, target: target)
+            }
+        }
+        .confirmationDialog(
+            "Delete Project",
+            isPresented: $viewModel.isShowingDeleteConfirmation,
+            presenting: viewModel.editingProject
+        ) { project in
+            Button("Delete \"\(project.name)\"", role: .destructive) {
+                Task { await viewModel.deleteProject(project) }
+            }
+        } message: { project in
+            Text("This will permanently delete \"\(project.name)\" and all its phases, milestones, tasks, and documents. This cannot be undone.")
         }
         .task {
             await viewModel.load()
@@ -48,47 +100,47 @@ public struct ProjectBrowserView: View {
     // MARK: - Filter Bar
 
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                // Lifecycle filters
+        HStack(spacing: 8) {
+            // Lifecycle filters
+            FilterChip(
+                label: "All",
+                isSelected: viewModel.selectedLifecycleFilter == .all
+            ) {
+                viewModel.selectedLifecycleFilter = .all
+            }
+
+            ForEach(LifecycleState.allCases, id: \.self) { state in
                 FilterChip(
-                    label: "All",
-                    isSelected: viewModel.selectedLifecycleFilter == .all
+                    label: state.rawValue.capitalized,
+                    isSelected: viewModel.selectedLifecycleFilter == .state(state),
+                    tint: state.color
                 ) {
-                    viewModel.selectedLifecycleFilter = .all
-                }
-
-                ForEach(LifecycleState.allCases, id: \.self) { state in
-                    FilterChip(
-                        label: state.rawValue.capitalized,
-                        isSelected: viewModel.selectedLifecycleFilter == .state(state),
-                        tint: state.color
-                    ) {
-                        viewModel.selectedLifecycleFilter = .state(state)
-                    }
-                }
-
-                Divider().frame(height: 20)
-
-                // Category filter
-                Menu {
-                    Button("All Categories") {
-                        viewModel.selectedCategoryId = nil
-                    }
-                    Divider()
-                    ForEach(viewModel.categories) { category in
-                        Button(category.name) {
-                            viewModel.selectedCategoryId = category.id
-                        }
-                    }
-                } label: {
-                    Label(selectedCategoryLabel, systemImage: "folder")
-                        .font(.caption)
+                    viewModel.selectedLifecycleFilter = .state(state)
                 }
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+
+            Divider().frame(height: 20)
+
+            // Category filter
+            Menu {
+                Button("All Categories") {
+                    viewModel.selectedCategoryId = nil
+                }
+                Divider()
+                ForEach(viewModel.categories) { category in
+                    Button(category.name) {
+                        viewModel.selectedCategoryId = category.id
+                    }
+                }
+            } label: {
+                Label(selectedCategoryLabel, systemImage: "folder")
+                    .font(.caption)
+            }
+
+            Spacer()
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 
     private var selectedCategoryLabel: String {
@@ -136,12 +188,15 @@ public struct ProjectBrowserView: View {
                 }
             } else {
                 List(viewModel.filteredProjects) { project in
-                    NavigationLink(value: project) {
+                    Button {
+                        onSelectProject?(project)
+                    } label: {
                         ProjectRowView(
                             project: project,
                             categoryName: viewModel.categoryName(for: project)
                         )
                     }
+                    .buttonStyle(.plain)
                     .contextMenu {
                         projectContextMenu(for: project)
                     }
@@ -170,6 +225,21 @@ public struct ProjectBrowserView: View {
 
     @ViewBuilder
     private func projectContextMenu(for project: Project) -> some View {
+        if project.lifecycleState == .idea, let onboardingManager {
+            Button {
+                onboardingManager.reset()
+                onboardingManager.sourceProject = project
+                if let transcript = project.quickCaptureTranscript, !transcript.isEmpty {
+                    onboardingManager.brainDumpText = transcript
+                }
+                showOnboarding = true
+            } label: {
+                Label("Start Onboarding", systemImage: "sparkles")
+            }
+
+            Divider()
+        }
+
         Button("Edit...") {
             viewModel.editingProject = project
             viewModel.isShowingEditSheet = true
@@ -216,7 +286,7 @@ struct FilterChip: View {
                 .background(isSelected ? tint.opacity(0.15) : Color.clear, in: Capsule())
                 .overlay(Capsule().strokeBorder(isSelected ? tint : .secondary.opacity(0.3), lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
     }
 }
 
@@ -280,6 +350,82 @@ struct ProjectRowView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+// MARK: - State Transition Sheet
+
+/// Sheet for collecting a pause reason or abandonment reflection before transitioning.
+struct StateTransitionSheet: View {
+    @Bindable var viewModel: ProjectBrowserViewModel
+    let project: Project
+    let target: LifecycleState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var reason = ""
+
+    private var title: String {
+        target == .paused ? "Pause Project" : "Abandon Project"
+    }
+
+    private var prompt: String {
+        target == .paused
+            ? "Why are you pausing this project? (This helps when you come back later.)"
+            : "What did you learn from this project? (A brief reflection helps close the loop.)"
+    }
+
+    private var confirmLabel: String {
+        target == .paused ? "Pause" : "Abandon"
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Text("Project")
+                        Spacer()
+                        Text(project.name)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("New State")
+                        Spacer()
+                        Label(target.rawValue.capitalized, systemImage: target.iconName)
+                            .foregroundStyle(target.color)
+                    }
+                }
+
+                Section(prompt) {
+                    TextEditor(text: $reason)
+                        .frame(minHeight: 60)
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(title)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(confirmLabel) {
+                        if target == .paused {
+                            viewModel.pauseReason = reason
+                        } else {
+                            viewModel.abandonmentReflection = reason
+                        }
+                        Task {
+                            await viewModel.transitionProject(project, to: target)
+                            dismiss()
+                        }
+                    }
+                    .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 400, minHeight: 300)
+        #endif
     }
 }
 

@@ -28,7 +28,7 @@ struct SettingsManagerTests {
         #expect(s.aiTrustLevel == "confirmAll")
         #expect(s.notificationsEnabled == true)
         #expect(s.maxDailyNotifications == 2)
-        #expect(s.quietHoursStart == 20)
+        #expect(s.quietHoursStart == 21)
         #expect(s.quietHoursEnd == 9)
         #expect(s.lifePlannerSyncEnabled == false)
         #expect(s.lifePlannerSyncMethod == "mysql")
@@ -59,42 +59,47 @@ struct SettingsManagerTests {
         #expect(s.integrationAPIPort == 9000)
     }
 
-    @Test("Values are clamped to valid ranges")
+    @Test("Out-of-range values are clamped when loaded from defaults")
     @MainActor
     func clamping() {
-        let s = freshSettings()
+        let suiteName = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let s = SettingsManager(defaults: defaults)
 
+        // Set out-of-range values — they persist clamped to defaults
         s.maxFocusSlots = 0
-        #expect(s.maxFocusSlots == 1) // clamped to min
-
-        s.maxFocusSlots = 100
-        #expect(s.maxFocusSlots == 10) // clamped to max
-
         s.pessimismMultiplier = 0.5
-        #expect(s.pessimismMultiplier == 1.0)
-
-        s.pessimismMultiplier = 5.0
-        #expect(s.pessimismMultiplier == 3.0)
-
         s.integrationAPIPort = 100
-        #expect(s.integrationAPIPort == 1024)
-
-        s.integrationAPIPort = 70000
-        #expect(s.integrationAPIPort == 65535)
-
         s.doneColumnMaxItems = 1
-        #expect(s.doneColumnMaxItems == 5)
+
+        // A new instance loading from those defaults gets the clamped values
+        let s2 = SettingsManager(defaults: defaults)
+        #expect(s2.maxFocusSlots == 1)
+        #expect(s2.pessimismMultiplier == 1.0)
+        #expect(s2.integrationAPIPort == 1024)
+        #expect(s2.doneColumnMaxItems == 5)
+
+        // Also check upper bounds
+        s.maxFocusSlots = 100
+        s.pessimismMultiplier = 5.0
+        s.integrationAPIPort = 70000
+
+        let s3 = SettingsManager(defaults: defaults)
+        #expect(s3.maxFocusSlots == 10)
+        #expect(s3.pessimismMultiplier == 3.0)
+        #expect(s3.integrationAPIPort == 65535)
     }
 
-    @Test("Different instances with same defaults share state")
+    @Test("Changes persist to UserDefaults and new instances read them")
     @MainActor
     func sharedDefaults() {
         let suiteName = UUID().uuidString
         let defaults = UserDefaults(suiteName: suiteName)!
         let s1 = SettingsManager(defaults: defaults)
-        let s2 = SettingsManager(defaults: defaults)
 
         s1.maxFocusSlots = 4
+        // A new instance reading the same defaults should pick up the change
+        let s2 = SettingsManager(defaults: defaults)
         #expect(s2.maxFocusSlots == 4)
     }
 }

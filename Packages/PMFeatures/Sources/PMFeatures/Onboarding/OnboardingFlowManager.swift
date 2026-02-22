@@ -1,4 +1,5 @@
 import Foundation
+import PMData
 import PMDomain
 import PMServices
 import PMUtilities
@@ -19,11 +20,27 @@ public struct ProposedStructureItem: Identifiable, Sendable {
     public let parentName: String?
     public var accepted: Bool
 
-    public init(kind: StructureItemKind, name: String, parentName: String? = nil, accepted: Bool = true) {
+    // Task-specific attributes
+    public let priority: Priority?
+    public let effortType: EffortType?
+    public let timeEstimateMinutes: Int?
+
+    public init(
+        kind: StructureItemKind,
+        name: String,
+        parentName: String? = nil,
+        accepted: Bool = true,
+        priority: Priority? = nil,
+        effortType: EffortType? = nil,
+        timeEstimateMinutes: Int? = nil
+    ) {
         self.kind = kind
         self.name = name
         self.parentName = parentName
         self.accepted = accepted
+        self.priority = priority
+        self.effortType = effortType
+        self.timeEstimateMinutes = timeEstimateMinutes
     }
 }
 
@@ -72,6 +89,9 @@ public final class OnboardingFlowManager {
     private let taskRepo: TaskRepositoryProtocol
     private let documentRepo: DocumentRepositoryProtocol
     private let contextAssembler: ContextAssembler
+
+    /// Optional sync manager for tracking changes.
+    public var syncManager: SyncManager?
 
     // MARK: - Init
 
@@ -160,6 +180,7 @@ public final class OnboardingFlowManager {
                 existing.definitionOfDone = definitionOfDone
                 existing.lifecycleState = .queued
                 try await projectRepo.save(existing)
+                syncManager?.trackChange(entityType: .project, entityId: existing.id, changeType: .update)
                 project = existing
             } else {
                 project = Project(
@@ -169,13 +190,19 @@ public final class OnboardingFlowManager {
                     definitionOfDone: definitionOfDone
                 )
                 try await projectRepo.save(project)
+                syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
             }
 
             // Create accepted phases, milestones, and tasks
             let acceptedItems = proposedItems.filter(\.accepted)
             try await createHierarchy(acceptedItems, projectId: project.id)
 
-            // Generate and save documents based on complexity
+            // Generate documents if not already generated
+            if (proposedComplexity == .medium || proposedComplexity == .complex) && generatedVision == nil {
+                await generateDocuments()
+            }
+
+            // Save documents based on complexity
             if proposedComplexity == .medium || proposedComplexity == .complex {
                 if let vision = generatedVision {
                     let doc = Document(
@@ -185,6 +212,7 @@ public final class OnboardingFlowManager {
                         content: vision
                     )
                     try await documentRepo.save(doc)
+                    syncManager?.trackChange(entityType: .document, entityId: doc.id, changeType: .create)
                 }
             }
             if proposedComplexity == .complex {
@@ -196,6 +224,7 @@ public final class OnboardingFlowManager {
                         content: brief
                     )
                     try await documentRepo.save(doc)
+                    syncManager?.trackChange(entityType: .document, entityId: doc.id, changeType: .create)
                 }
             }
 
@@ -280,12 +309,21 @@ public final class OnboardingFlowManager {
 
     private func extractStructure(from actions: [AIAction]) -> [ProposedStructureItem] {
         var items: [ProposedStructureItem] = []
+        // Track the last milestone name for parenting tasks
+        var lastMilestoneName: String?
         for action in actions {
             switch action {
             case .createMilestone(_, let name):
+                lastMilestoneName = name
                 items.append(ProposedStructureItem(kind: .milestone, name: name))
-            case .createTask(_, let name, _, _):
-                items.append(ProposedStructureItem(kind: .task, name: name))
+            case .createTask(_, let name, let priority, let effortType):
+                items.append(ProposedStructureItem(
+                    kind: .task,
+                    name: name,
+                    parentName: lastMilestoneName,
+                    priority: priority,
+                    effortType: effortType
+                ))
             default:
                 break
             }
@@ -307,34 +345,49 @@ public final class OnboardingFlowManager {
             phase = Phase(projectId: projectId, name: "Phase 1")
         }
         try await phaseRepo.save(phase)
+        syncManager?.trackChange(entityType: .phase, entityId: phase.id, changeType: .create)
 
         // Create additional phases
-        for phaseItem in phases.dropFirst() {
-            let p = Phase(projectId: projectId, name: phaseItem.name, sortOrder: phases.firstIndex(where: { $0.id == phaseItem.id }) ?? 0)
+        for (index, phaseItem) in phases.dropFirst().enumerated() {
+            let p = Phase(projectId: projectId, name: phaseItem.name, sortOrder: index + 1)
             try await phaseRepo.save(p)
+            syncManager?.trackChange(entityType: .phase, entityId: p.id, changeType: .create)
         }
 
-        // Create milestones under first phase
-        var createdMilestones: [Milestone] = []
+        // Create milestones under first phase, tracking name→milestone for task parenting
+        var milestonesByName: [String: Milestone] = [:]
+        var firstMilestone: Milestone?
         for (index, msItem) in milestones.enumerated() {
             let ms = Milestone(phaseId: phase.id, name: msItem.name, sortOrder: index)
             try await milestoneRepo.save(ms)
-            createdMilestones.append(ms)
+            syncManager?.trackChange(entityType: .milestone, entityId: ms.id, changeType: .create)
+            milestonesByName[msItem.name] = ms
+            if firstMilestone == nil { firstMilestone = ms }
         }
 
-        // If no milestones, create a default one for tasks
-        if createdMilestones.isEmpty && !tasks.isEmpty {
+        // If no milestones but tasks exist, create a default one
+        if milestonesByName.isEmpty && !tasks.isEmpty {
             let ms = Milestone(phaseId: phase.id, name: "Milestone 1")
             try await milestoneRepo.save(ms)
-            createdMilestones.append(ms)
+            syncManager?.trackChange(entityType: .milestone, entityId: ms.id, changeType: .create)
+            firstMilestone = ms
         }
 
-        // Create tasks under first milestone
-        if let firstMs = createdMilestones.first {
-            for (index, taskItem) in tasks.enumerated() {
-                let task = PMTask(milestoneId: firstMs.id, name: taskItem.name, sortOrder: index)
-                try await taskRepo.save(task)
-            }
+        // Create tasks under their parent milestone (or first milestone as fallback)
+        for (index, taskItem) in tasks.enumerated() {
+            let targetMs = taskItem.parentName.flatMap { milestonesByName[$0] } ?? firstMilestone
+            guard let ms = targetMs else { continue }
+
+            let task = PMTask(
+                milestoneId: ms.id,
+                name: taskItem.name,
+                sortOrder: index,
+                timeEstimateMinutes: taskItem.timeEstimateMinutes,
+                priority: taskItem.priority ?? .normal,
+                effortType: taskItem.effortType
+            )
+            try await taskRepo.save(task)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .create)
         }
     }
 

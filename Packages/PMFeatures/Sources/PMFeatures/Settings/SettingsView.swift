@@ -7,12 +7,14 @@ import PMDesignSystem
 public struct SettingsView: View {
     @Bindable var settings: SettingsManager
     var exportService: ExportService?
+    var syncManager: SyncManager?
     @State private var exportStatus: ExportStatus?
     @State private var isExporting = false
 
-    public init(settings: SettingsManager, exportService: ExportService? = nil) {
+    public init(settings: SettingsManager, exportService: ExportService? = nil, syncManager: SyncManager? = nil) {
         self.settings = settings
         self.exportService = exportService
+        self.syncManager = syncManager
     }
 
     public var body: some View {
@@ -27,6 +29,7 @@ public struct SettingsView: View {
                 aiSection
                 exportSection
                 syncSection
+                lifePlannerSyncSection
                 integrationSection
             }
             .padding()
@@ -115,6 +118,17 @@ public struct SettingsView: View {
                         .labelsHidden()
                         .frame(width: 80)
                     }
+
+                    Divider()
+
+                    Text("Notification Types")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    Toggle("Waiting items past check-back date", isOn: $settings.notifyWaitingCheckBack)
+                    Toggle("Deadlines approaching (24h)", isOn: $settings.notifyDeadlineApproaching)
+                    Toggle("Check-in reminders", isOn: $settings.notifyCheckInReminder)
+                    Toggle("Phase completion", isOn: $settings.notifyPhaseCompletion)
                 }
             }
         }
@@ -159,13 +173,21 @@ public struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 PMSectionHeader("AI Assistant", subtitle: "Configure AI model and trust level")
 
+                Picker("Provider", selection: $settings.aiProvider) {
+                    Text("Anthropic").tag("anthropic")
+                    Text("OpenAI").tag("openai")
+                }
+
+                SecureField("API Key", text: $settings.aiApiKey)
+                    .textFieldStyle(.roundedBorder)
+
                 TextField("Model identifier", text: $settings.aiModel)
                     .textFieldStyle(.roundedBorder)
 
                 Picker("Trust level", selection: $settings.aiTrustLevel) {
                     Text("Confirm All").tag("confirmAll")
-                    Text("Confirm Destructive").tag("confirmDestructive")
-                    Text("Auto").tag("auto")
+                    Text("Auto-apply Minor").tag("autoMinor")
+                    Text("Auto-apply All").tag("autoAll")
                 }
             }
         }
@@ -230,9 +252,66 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Sync
+    // MARK: - CloudKit Sync
 
     private var syncSection: some View {
+        PMCard {
+            VStack(alignment: .leading, spacing: 12) {
+                PMSectionHeader("iCloud Sync", subtitle: "Sync data across your devices via CloudKit")
+
+                Toggle("Enable iCloud sync", isOn: $settings.syncEnabled)
+
+                if let syncManager {
+                    HStack {
+                        if syncManager.isSyncing {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Syncing...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if let lastSync = syncManager.lastSyncDate {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("Last sync: \(lastSync, style: .relative) ago")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Image(systemName: "icloud.slash")
+                                .foregroundStyle(.secondary)
+                            Text("Not yet synced")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        if syncManager.pendingChangeCount > 0 {
+                            Text("\(syncManager.pendingChangeCount) pending")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
+                    if let error = syncManager.error {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    Button {
+                        Task { await syncManager.syncNow() }
+                    } label: {
+                        Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(!settings.syncEnabled || syncManager.isSyncing)
+                }
+            }
+        }
+    }
+
+    // MARK: - Life Planner Sync
+
+    private var lifePlannerSyncSection: some View {
         PMCard {
             VStack(alignment: .leading, spacing: 12) {
                 PMSectionHeader("Life Planner Sync", subtitle: "Sync projects with external life planner")

@@ -1,4 +1,5 @@
 import Foundation
+import PMData
 import PMDomain
 import PMUtilities
 import os
@@ -21,6 +22,9 @@ public final class QuickCaptureViewModel {
 
     private let projectRepo: ProjectRepositoryProtocol
     private let categoryRepo: CategoryRepositoryProtocol
+
+    /// Optional sync manager for tracking changes.
+    public var syncManager: SyncManager?
 
     // MARK: - Init
 
@@ -76,6 +80,7 @@ public final class QuickCaptureViewModel {
                 quickCaptureTranscript: effectiveTranscript
             )
             try await projectRepo.save(project)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
             didSave = true
             Log.ui.info("Quick captured project '\(projectName)'")
         } catch {

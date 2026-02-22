@@ -43,6 +43,7 @@ public final class ProjectRoadmapViewModel {
     private let phaseRepo: PhaseRepositoryProtocol
     private let milestoneRepo: MilestoneRepositoryProtocol
     private let taskRepo: TaskRepositoryProtocol
+    private let subtaskRepo: SubtaskRepositoryProtocol?
     private let dependencyRepo: DependencyRepositoryProtocol
 
     // MARK: - Init
@@ -53,6 +54,7 @@ public final class ProjectRoadmapViewModel {
         phaseRepo: PhaseRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
         taskRepo: TaskRepositoryProtocol,
+        subtaskRepo: SubtaskRepositoryProtocol? = nil,
         dependencyRepo: DependencyRepositoryProtocol
     ) {
         self.project = project
@@ -60,6 +62,7 @@ public final class ProjectRoadmapViewModel {
         self.phaseRepo = phaseRepo
         self.milestoneRepo = milestoneRepo
         self.taskRepo = taskRepo
+        self.subtaskRepo = subtaskRepo
         self.dependencyRepo = dependencyRepo
     }
 
@@ -174,6 +177,22 @@ public final class ProjectRoadmapViewModel {
                             taskStatuses: taskStatusMap
                         )
 
+                        // Compute task progress from subtasks if available
+                        var taskProgress: Double
+                        if task.status == .completed {
+                            taskProgress = 1.0
+                        } else if let subtaskRepo {
+                            let subtasks = (try? await subtaskRepo.fetchAll(forTask: task.id)) ?? []
+                            if subtasks.isEmpty {
+                                taskProgress = 0.0
+                            } else {
+                                let done = subtasks.filter(\.isCompleted).count
+                                taskProgress = Double(done) / Double(subtasks.count)
+                            }
+                        } else {
+                            taskProgress = 0.0
+                        }
+
                         flatItems.append(RoadmapItem(
                             id: task.id,
                             kind: .task,
@@ -183,7 +202,7 @@ public final class ProjectRoadmapViewModel {
                             priority: task.priority,
                             effortType: task.effortType,
                             deadline: task.deadline,
-                            progress: task.status == .completed ? 1.0 : 0.0,
+                            progress: taskProgress,
                             depth: 2,
                             hasUnmetDependencies: taskUnmet,
                             parentId: ms.id

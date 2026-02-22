@@ -148,3 +148,12 @@ struct QuickCaptureWidget: Widget {
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
+
+// MARK: - Widget Bundle
+
+@main
+struct QuickCaptureWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        QuickCaptureWidget()
+    }
+}

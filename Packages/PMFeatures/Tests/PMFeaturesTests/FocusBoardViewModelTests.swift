@@ -377,4 +377,80 @@ struct FocusBoardViewModelTests {
         #expect(updated.kanbanColumn == .inProgress)
         #expect(updated.status == .inProgress)
     }
+
+    @Test("moveTaskById finds and moves task across projects")
+    @MainActor
+    func moveTaskById() async {
+        let (vm, projectRepo, _, taskRepo, milestoneRepo, phaseRepo, _) = makeFocusBoardVM()
+        let msId = UUID()
+        let taskId = UUID()
+        let task = PMTask(id: taskId, milestoneId: msId, name: "DragMe", kanbanColumn: .toDo)
+        let (_, _, _) = seedFocusedProject(vm: vm, projectRepo: projectRepo, phaseRepo: phaseRepo,
+                                            milestoneRepo: milestoneRepo, taskRepo: taskRepo, tasks: [task])
+        await vm.load()
+
+        await vm.moveTaskById(taskId, to: .done)
+
+        let updated = taskRepo.tasks.first { $0.id == taskId }!
+        #expect(updated.kanbanColumn == .done)
+        #expect(updated.status == .completed)
+        #expect(updated.completedAt != nil)
+    }
+
+    @Test("Block task sets blocked state")
+    @MainActor
+    func blockTaskFromBoard() async {
+        let (vm, projectRepo, _, taskRepo, milestoneRepo, phaseRepo, _) = makeFocusBoardVM()
+        let msId = UUID()
+        let task = PMTask(id: UUID(), milestoneId: msId, name: "T1", kanbanColumn: .toDo)
+        let (_, _, _) = seedFocusedProject(vm: vm, projectRepo: projectRepo, phaseRepo: phaseRepo,
+                                            milestoneRepo: milestoneRepo, taskRepo: taskRepo, tasks: [task])
+        await vm.load()
+
+        await vm.blockTask(taskRepo.tasks[0], type: .missingInfo, reason: "Need spec")
+
+        let updated = taskRepo.tasks[0]
+        #expect(updated.status == .blocked)
+        #expect(updated.blockedType == .missingInfo)
+        #expect(updated.blockedReason == "Need spec")
+        #expect(updated.kanbanColumn == .toDo)
+    }
+
+    @Test("Set waiting sets waiting state")
+    @MainActor
+    func setWaitingFromBoard() async {
+        let (vm, projectRepo, _, taskRepo, milestoneRepo, phaseRepo, _) = makeFocusBoardVM()
+        let msId = UUID()
+        let task = PMTask(id: UUID(), milestoneId: msId, name: "T1", kanbanColumn: .toDo)
+        let (_, _, _) = seedFocusedProject(vm: vm, projectRepo: projectRepo, phaseRepo: phaseRepo,
+                                            milestoneRepo: milestoneRepo, taskRepo: taskRepo, tasks: [task])
+        await vm.load()
+
+        await vm.setWaiting(taskRepo.tasks[0], reason: "Waiting for review")
+
+        let updated = taskRepo.tasks[0]
+        #expect(updated.status == .waiting)
+        #expect(updated.waitingReason == "Waiting for review")
+        #expect(updated.kanbanColumn == .toDo)
+    }
+
+    @Test("Unblock task clears blocked state")
+    @MainActor
+    func unblockTaskFromBoard() async {
+        let (vm, projectRepo, _, taskRepo, milestoneRepo, phaseRepo, _) = makeFocusBoardVM()
+        let msId = UUID()
+        let task = PMTask(id: UUID(), milestoneId: msId, name: "T1", status: .blocked,
+                           blockedType: .missingInfo, blockedReason: "stuff", kanbanColumn: .toDo)
+        let (_, _, _) = seedFocusedProject(vm: vm, projectRepo: projectRepo, phaseRepo: phaseRepo,
+                                            milestoneRepo: milestoneRepo, taskRepo: taskRepo, tasks: [task])
+        await vm.load()
+
+        await vm.unblockTask(taskRepo.tasks[0])
+
+        let updated = taskRepo.tasks[0]
+        #expect(updated.status == .inProgress)
+        #expect(updated.blockedType == nil)
+        #expect(updated.blockedReason == nil)
+        #expect(updated.kanbanColumn == .inProgress)
+    }
 }

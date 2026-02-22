@@ -38,6 +38,7 @@ public actor SyncEngine {
     private let backend: SyncBackendProtocol
     private let queue: SyncQueueProtocol
     private let conflictResolver: ConflictResolver
+    private let dataProvider: SyncDataProviderProtocol?
 
     private var syncState: SyncState
     private var isSyncing = false
@@ -51,6 +52,7 @@ public actor SyncEngine {
     public init(
         backend: SyncBackendProtocol,
         queue: SyncQueueProtocol,
+        dataProvider: SyncDataProviderProtocol? = nil,
         conflictResolver: ConflictResolver = ConflictResolver(),
         syncState: SyncState = SyncState(),
         minSyncInterval: TimeInterval = 30,
@@ -58,6 +60,7 @@ public actor SyncEngine {
     ) {
         self.backend = backend
         self.queue = queue
+        self.dataProvider = dataProvider
         self.conflictResolver = conflictResolver
         self.syncState = syncState
         self.minSyncInterval = minSyncInterval
@@ -104,6 +107,10 @@ public actor SyncEngine {
 
         syncState.lastSyncDate = Date()
         syncState.pendingChangeCount = try await queue.pendingCount()
+
+        // Purge old synced changes (older than 7 days)
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        try await queue.purge(before: cutoff)
     }
 
     /// Push pending local changes to the remote.
@@ -111,13 +118,21 @@ public actor SyncEngine {
         let pending = try await queue.pendingChanges()
         guard !pending.isEmpty else { return }
 
-        // In a real implementation, we'd serialize entity data here
-        let payloads: [UUID: Data] = [:]
+        // Serialize entity data for each pending change
+        var payloads: [UUID: Data] = [:]
+        if let provider = dataProvider {
+            for change in pending where change.changeType != .delete {
+                if let data = try await provider.serialize(entityType: change.entityType, entityId: change.entityId) {
+                    payloads[change.entityId] = data
+                }
+            }
+        }
+
         try await backend.push(changes: pending, payloads: payloads)
 
         let ids = pending.map(\.id)
         try await queue.markSynced(ids: ids)
-        Log.data.info("Pushed \(pending.count) changes to remote")
+        Log.data.info("Pushed \(pending.count) changes (\(payloads.count) with payloads) to remote")
     }
 
     /// Pull remote changes and apply locally.
@@ -145,6 +160,36 @@ public actor SyncEngine {
                 )
                 let resolution = conflictResolver.resolve(conflict, threshold: conflictThresholdSeconds)
                 Log.data.info("Conflict on \(change.entityType.rawValue) \(change.entityId): \(resolution.rawValue)")
+
+                // Skip applying remote if we're keeping local
+                if resolution == .keepLocal {
+                    continue
+                }
+                // For manual merge, skip for now (document conflicts surface to UI)
+                if resolution == .manualMerge {
+                    Log.data.notice("Manual merge needed for \(change.entityType.rawValue) \(change.entityId)")
+                    continue
+                }
+            }
+
+            // Apply the remote change locally
+            if let provider = dataProvider {
+                switch change.changeType {
+                case .create, .update:
+                    if let payload = result.payloads[change.entityId] {
+                        do {
+                            try await provider.apply(entityType: change.entityType, entityId: change.entityId, data: payload)
+                        } catch {
+                            Log.data.error("Failed to apply remote \(change.entityType.rawValue) \(change.entityId): \(error)")
+                        }
+                    }
+                case .delete:
+                    do {
+                        try await provider.deleteEntity(entityType: change.entityType, entityId: change.entityId)
+                    } catch {
+                        Log.data.error("Failed to delete remote \(change.entityType.rawValue) \(change.entityId): \(error)")
+                    }
+                }
             }
         }
 

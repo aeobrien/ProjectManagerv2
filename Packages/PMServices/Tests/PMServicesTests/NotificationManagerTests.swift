@@ -267,6 +267,32 @@ struct NotificationManagerTests {
         let result = try await manager.requestAuthorization()
         #expect(result == true)
     }
+
+    @Test("Delivery error propagates")
+    func deliveryError() async {
+        let delivery = MockNotificationDelivery()
+        delivery.shouldThrow = true
+        let prefs = NotificationPreferences(quietHoursStart: 23, quietHoursEnd: 5)
+        let manager = NotificationManager(delivery: delivery, preferences: { prefs })
+
+        var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        components.hour = 12
+        let noon = Calendar.current.date(from: components)!
+
+        let notification = ScheduledNotification(
+            type: .checkInReminder,
+            title: "Test",
+            body: "Body",
+            scheduledFor: noon
+        )
+
+        do {
+            _ = try await manager.scheduleIfAllowed(notification)
+            #expect(Bool(false), "Expected error to be thrown")
+        } catch {
+            #expect(delivery.scheduledNotifications.isEmpty)
+        }
+    }
 }
 
 // MARK: - Notification Builders Tests

@@ -29,7 +29,7 @@ public struct IOSTabNavigationView<
     QuickCaptureContent: View,
     MoreContent: View
 >: View {
-    @State private var selectedTab: IOSTab = .focusBoard
+    @Binding var selectedTab: IOSTab
 
     let focusBoard: () -> FocusBoardContent
     let projects: () -> ProjectsContent
@@ -38,12 +38,14 @@ public struct IOSTabNavigationView<
     let more: () -> MoreContent
 
     public init(
+        selectedTab: Binding<IOSTab>,
         @ViewBuilder focusBoard: @escaping () -> FocusBoardContent,
         @ViewBuilder projects: @escaping () -> ProjectsContent,
         @ViewBuilder aiChat: @escaping () -> AIChatContent,
         @ViewBuilder quickCapture: @escaping () -> QuickCaptureContent,
         @ViewBuilder more: @escaping () -> MoreContent
     ) {
+        self._selectedTab = selectedTab
         self.focusBoard = focusBoard
         self.projects = projects
         self.aiChat = aiChat
@@ -87,7 +89,7 @@ public struct IOSTabNavigationView<
 }
 
 #Preview("iOS Tab Navigation") {
-    IOSTabNavigationView {
+    IOSTabNavigationView(selectedTab: .constant(.focusBoard)) {
         Text("Focus Board")
     } projects: {
         Text("Projects")

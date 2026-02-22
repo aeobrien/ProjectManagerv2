@@ -7,6 +7,8 @@ import os
 /// State machine for voice recording and transcription.
 public enum VoiceInputState: Sendable, Equatable {
     case idle
+    case requestingPermission
+    case loadingModel
     case recording
     case processing
     case completed(String)
@@ -45,10 +47,60 @@ public final class VoiceInputManager {
     public func startRecording() {
         guard state == .idle || isTerminalState else { return }
 
-        state = .recording
+        state = .requestingPermission
         audioLevels = []
         editableTranscript = ""
 
+        Task {
+            let permitted = await requestMicrophonePermission()
+            guard permitted else {
+                state = .error("Microphone access denied. Enable it in System Settings > Privacy & Security > Microphone.")
+                Log.voice.error("Microphone permission denied")
+                return
+            }
+            beginRecording()
+        }
+    }
+
+    /// Request microphone permission and return whether it was granted.
+    private func requestMicrophonePermission() async -> Bool {
+        #if os(macOS)
+        if #available(macOS 14.0, *) {
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            switch status {
+            case .authorized:
+                return true
+            case .notDetermined:
+                return await AVCaptureDevice.requestAccess(for: .audio)
+            case .denied, .restricted:
+                return false
+            @unknown default:
+                return false
+            }
+        }
+        return true
+        #else
+        let session = AVAudioSession.sharedInstance()
+        let status = session.recordPermission
+        switch status {
+        case .granted:
+            return true
+        case .undetermined:
+            return await withCheckedContinuation { continuation in
+                session.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        case .denied:
+            return false
+        @unknown default:
+            return false
+        }
+        #endif
+    }
+
+    /// Actually begin the recording session after permission is confirmed.
+    private func beginRecording() {
         let tempDir = FileManager.default.temporaryDirectory
         let url = tempDir.appendingPathComponent("voice_capture_\(UUID().uuidString).wav")
         recordingURL = url
@@ -62,9 +114,7 @@ public final class VoiceInputManager {
         ]
 
         do {
-            #if os(macOS)
-            // macOS doesn't require audio session setup
-            #else
+            #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
@@ -73,6 +123,8 @@ public final class VoiceInputManager {
             audioRecorder = try AVAudioRecorder(url: url, settings: settings)
             audioRecorder?.isMeteringEnabled = true
             audioRecorder?.record()
+
+            state = .recording
 
             // Sample audio levels for waveform
             levelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -134,9 +186,11 @@ public final class VoiceInputManager {
         do {
             if whisperKit == nil {
                 let model = self.modelSize
+                state = .loadingModel
                 Log.voice.info("Loading Whisper model: \(model)")
                 let config = WhisperKitConfig(model: "openai_whisper-\(model)")
                 whisperKit = try await WhisperKit(config)
+                state = .processing
             }
 
             guard let kit = whisperKit else {
@@ -181,6 +235,11 @@ public final class VoiceInputManager {
             try? FileManager.default.removeItem(at: url)
             recordingURL = nil
         }
+    }
+
+    /// Whether the model is currently being loaded/downloaded.
+    public var isLoadingModel: Bool {
+        state == .loadingModel
     }
 
     private var isTerminalState: Bool {

@@ -34,6 +34,8 @@ targets:
       - package: PMData
       - package: PMDomain
       - package: PMUtilities
+    entitlements:
+      path: ProjectManager/ProjectManager.entitlements
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app
@@ -43,6 +45,7 @@ targets:
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Project Manager uses the microphone for voice input to capture ideas and chat with the AI assistant."
     scheme:
       testTargets:
         - ProjectManagerTests
@@ -60,3 +63,68 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.tests
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
+
+  ProjectManageriOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: ProjectManageriOS/Sources
+        excludes:
+          - "**/Widget/**"
+    dependencies:
+      - package: PMFeatures
+      - package: PMServices
+      - package: PMDesignSystem
+      - package: PMData
+      - package: PMDomain
+      - package: PMUtilities
+    entitlements:
+      path: ProjectManageriOS/ProjectManageriOS.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.ios
+        PRODUCT_NAME: ProjectManager
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Project Manager uses the microphone for voice input to capture ideas and chat with the AI assistant."
+    info:
+      path: ProjectManageriOS/Info.plist
+      properties:
+        CFBundleDisplayName: "Project Manager"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations~iPad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~iPhone:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSMicrophoneUsageDescription: "Project Manager uses the microphone for voice input to capture ideas and chat with the AI assistant."
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - projectmanager
+            CFBundleURLName: "com.projectmanager.app.ios"
+
+  QuickCaptureWidgetExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ProjectManageriOS/Sources/Widget
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    entitlements:
+      path: ProjectManageriOS/QuickCaptureWidgetExtension.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.ios.widget
+        PRODUCT_NAME: QuickCaptureWidgetExtension
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "Quick Capture"
+        INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: "com.apple.widgetkit-extension"

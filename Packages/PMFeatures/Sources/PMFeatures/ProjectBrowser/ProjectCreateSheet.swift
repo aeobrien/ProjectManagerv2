@@ -51,6 +51,8 @@ struct ProjectCreateSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 400, minHeight: 300)
+        #endif
     }
 }

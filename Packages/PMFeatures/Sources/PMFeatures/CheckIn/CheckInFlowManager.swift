@@ -44,6 +44,15 @@ public final class CheckInFlowManager {
     private let actionExecutor: ActionExecutor
     private let contextAssembler: ContextAssembler
 
+    /// Optional knowledge base manager for incremental indexing of check-in content.
+    public var knowledgeBaseManager: KnowledgeBaseManager?
+
+    /// Optional sync manager for tracking check-in changes.
+    public var syncManager: SyncManager?
+
+    /// Optional notification manager for scheduling check-in reminders.
+    public var notificationManager: NotificationManager?
+
     // MARK: - Configuration
 
     public var gentleThresholdDays: Int = 3
@@ -179,6 +188,18 @@ public final class CheckInFlowManager {
             )
             try await checkInRepo.save(record)
             lastCreatedRecord = record
+            syncManager?.trackChange(entityType: .checkIn, entityId: record.id, changeType: .create)
+
+            // Index check-in content in knowledge base
+            if let kb = knowledgeBaseManager {
+                Task.detached {
+                    do {
+                        try await kb.indexCheckIn(record)
+                    } catch {
+                        Log.ai.error("Failed to index check-in in KB: \(error)")
+                    }
+                }
+            }
 
             Log.focus.info("Check-in completed for '\(project.name)' (\(depth.rawValue)), \(unaddressedTasks.count) tasks deferred")
 

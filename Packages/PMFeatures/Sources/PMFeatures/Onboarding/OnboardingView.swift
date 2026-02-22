@@ -182,10 +182,27 @@ public struct OnboardingView: View {
                             Text(item.name)
                                 .font(.subheadline)
                         }
-                        if let parent = item.parentName {
-                            Text("under \(parent)")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                        HStack(spacing: 6) {
+                            if let parent = item.parentName {
+                                Text("under \(parent)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if let priority = item.priority, priority != .normal {
+                                Text(priority.rawValue)
+                                    .font(.caption2)
+                                    .foregroundStyle(priority.color)
+                            }
+                            if let effort = item.effortType {
+                                Text(effort.rawValue.camelCaseToWords)
+                                    .font(.caption2)
+                                    .foregroundStyle(effort.color)
+                            }
+                            if let estimate = item.timeEstimateMinutes {
+                                Text("\(estimate)m")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
 
@@ -194,6 +211,45 @@ public struct OnboardingView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     manager.toggleItem(at: index)
+                }
+            }
+
+            // Document generation for medium/complex projects
+            if manager.proposedComplexity != .simple {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Documents")
+                        .font(.subheadline.weight(.semibold))
+
+                    if manager.generatedVision != nil {
+                        Label("Vision statement ready", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                    if manager.generatedTechBrief != nil {
+                        Label("Technical brief ready", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+
+                    if manager.generatedVision == nil {
+                        Button {
+                            Task { await manager.generateDocuments() }
+                        } label: {
+                            if manager.isLoading {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label("Generate Documents", systemImage: "doc.text")
+                            }
+                        }
+                        .disabled(manager.isLoading)
+
+                        Text("Documents will also be generated automatically when you create the project.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
 

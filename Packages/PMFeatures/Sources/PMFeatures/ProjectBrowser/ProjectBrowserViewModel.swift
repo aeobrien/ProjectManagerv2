@@ -54,6 +54,9 @@ public final class ProjectBrowserViewModel {
     private let taskRepo: TaskRepositoryProtocol?
     private let documentRepo: DocumentRepositoryProtocol?
 
+    /// Optional sync manager for tracking project changes.
+    public var syncManager: SyncManager?
+
     // MARK: - Init
 
     public init(
@@ -148,6 +151,7 @@ public final class ProjectBrowserViewModel {
                 return
             }
             try await projectRepo.save(project)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
             Log.ui.info("Created project '\(name)'")
             await load()
         } catch {
@@ -165,6 +169,7 @@ public final class ProjectBrowserViewModel {
                 return
             }
             try await projectRepo.save(updated)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .update)
             Log.ui.info("Updated project '\(project.name)'")
             await load()
         } catch {
@@ -175,6 +180,7 @@ public final class ProjectBrowserViewModel {
     public func deleteProject(_ project: Project) async {
         do {
             try await projectRepo.delete(id: project.id)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .delete)
             Log.ui.info("Deleted project '\(project.name)'")
             await load()
         } catch {
@@ -190,14 +196,23 @@ public final class ProjectBrowserViewModel {
             return
         }
 
+        // Focusing requires slot assignment via FocusManager
+        if newState == .focused {
+            let currentFocused = projects.filter { $0.lifecycleState == .focused }
+            guard let focused = FocusManager.focus(project: project, currentFocused: currentFocused) else {
+                error = "Cannot focus: all slots are full or category diversity violated"
+                return
+            }
+            await updateProject(focused)
+            return
+        }
+
         var updated = project
         updated.lifecycleState = newState
         updated.updatedAt = Date()
 
         // Clear focus slot when leaving focused state
-        if newState != .focused {
-            updated.focusSlotIndex = nil
-        }
+        updated.focusSlotIndex = nil
 
         // Set pause reason or abandonment reflection
         if newState == .paused {

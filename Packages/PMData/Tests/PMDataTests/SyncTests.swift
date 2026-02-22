@@ -367,4 +367,119 @@ struct SyncEngineTests {
         let inProgress = await engine.isSyncInProgress()
         #expect(inProgress == false)
     }
+
+    @Test("Sync with dataProvider serializes payloads on push")
+    func syncWithDataProviderPush() async throws {
+        let backend = MockSyncBackend()
+        let queue = InMemorySyncQueue()
+        let provider = MockSyncDataProvider()
+        let engine = SyncEngine(backend: backend, queue: queue, dataProvider: provider, minSyncInterval: 0)
+
+        let entityId = UUID()
+        try await engine.trackChange(entityType: .project, entityId: entityId, changeType: .create)
+        try await engine.sync()
+
+        #expect(provider.serializedIds.contains(entityId))
+        #expect(backend.pushedChanges.count == 1)
+    }
+
+    @Test("Sync with dataProvider applies remote changes on pull")
+    func syncWithDataProviderPull() async throws {
+        let backend = MockSyncBackend()
+        let queue = InMemorySyncQueue()
+        let provider = MockSyncDataProvider()
+
+        let entityId = UUID()
+        let payload = Data("test-payload".utf8)
+        backend.remoteChanges = [
+            SyncChange(entityType: .task, entityId: entityId, changeType: .update, synced: true)
+        ]
+        backend.remotePayloads = [entityId: payload]
+
+        let engine = SyncEngine(backend: backend, queue: queue, dataProvider: provider, minSyncInterval: 0)
+        try await engine.sync()
+
+        #expect(provider.appliedIds.contains(entityId))
+    }
+
+    @Test("Sync with dataProvider deletes remote entities on pull")
+    func syncWithDataProviderDelete() async throws {
+        let backend = MockSyncBackend()
+        let queue = InMemorySyncQueue()
+        let provider = MockSyncDataProvider()
+
+        let entityId = UUID()
+        backend.remoteChanges = [
+            SyncChange(entityType: .project, entityId: entityId, changeType: .delete, synced: true)
+        ]
+
+        let engine = SyncEngine(backend: backend, queue: queue, dataProvider: provider, minSyncInterval: 0)
+        try await engine.sync()
+
+        #expect(provider.deletedIds.contains(entityId))
+    }
+
+    @Test("Sync purges old synced changes")
+    func syncPurgesOldChanges() async throws {
+        let backend = MockSyncBackend()
+        let queue = InMemorySyncQueue()
+        let engine = SyncEngine(backend: backend, queue: queue, minSyncInterval: 0)
+
+        // Enqueue an old change, mark it synced, then sync
+        let oldChange = SyncChange(
+            entityType: .project, entityId: UUID(), changeType: .create,
+            timestamp: Date(timeIntervalSinceNow: -86400 * 10) // 10 days ago
+        )
+        try await queue.enqueue(oldChange)
+        try await queue.markSynced(ids: [oldChange.id])
+
+        try await engine.sync()
+
+        // Old synced change should be purged
+        let all = try await queue.allChanges()
+        #expect(all.isEmpty)
+    }
+
+    @Test("Sync without dataProvider still completes")
+    func syncWithoutDataProvider() async throws {
+        let backend = MockSyncBackend()
+        let queue = InMemorySyncQueue()
+        // No dataProvider — should still push/pull successfully without serialization
+        let engine = SyncEngine(backend: backend, queue: queue, minSyncInterval: 0)
+
+        let entityId = UUID()
+        try await engine.trackChange(entityType: .project, entityId: entityId, changeType: .create)
+
+        backend.remoteChanges = [
+            SyncChange(entityType: .task, entityId: UUID(), changeType: .update, synced: true)
+        ]
+
+        try await engine.sync()
+
+        #expect(backend.pushedChanges.count == 1)
+        let state = await engine.currentState()
+        #expect(state.lastSyncDate != nil)
+    }
+}
+
+// MARK: - Mock SyncDataProvider
+
+final class MockSyncDataProvider: SyncDataProviderProtocol, @unchecked Sendable {
+    var serializedIds: [UUID] = []
+    var appliedIds: [UUID] = []
+    var deletedIds: [UUID] = []
+    var serializeResult: Data? = Data("mock-data".utf8)
+
+    func serialize(entityType: SyncEntityType, entityId: UUID) async throws -> Data? {
+        serializedIds.append(entityId)
+        return serializeResult
+    }
+
+    func apply(entityType: SyncEntityType, entityId: UUID, data: Data) async throws {
+        appliedIds.append(entityId)
+    }
+
+    func deleteEntity(entityType: SyncEntityType, entityId: UUID) async throws {
+        deletedIds.append(entityId)
+    }
 }

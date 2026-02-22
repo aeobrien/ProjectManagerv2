@@ -1,4 +1,5 @@
 import Foundation
+import PMData
 import PMDomain
 import PMServices
 import PMUtilities
@@ -53,6 +54,9 @@ public final class RetrospectiveFlowManager {
     private let checkInRepo: CheckInRepositoryProtocol
     private let llmClient: LLMClientProtocol
     private let contextAssembler: ContextAssembler
+
+    /// Optional sync manager for tracking changes.
+    public var syncManager: SyncManager?
 
     // MARK: - Init
 
@@ -233,6 +237,7 @@ public final class RetrospectiveFlowManager {
 
         do {
             try await phaseRepo.save(phase)
+            syncManager?.trackChange(entityType: .phase, entityId: phase.id, changeType: .update)
             targetPhase = phase
             step = .completed
             Log.ui.info("Retrospective saved for phase '\(phase.name)'")

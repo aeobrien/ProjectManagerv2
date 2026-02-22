@@ -35,12 +35,19 @@ public final class ChatViewModel {
 
     public private(set) var messages: [ChatMessage] = []
     public var inputText: String = ""
-    public var selectedProjectId: UUID?
+    public var selectedProjectId: UUID? {
+        didSet {
+            if selectedProjectId != oldValue {
+                Task { await checkReturnBriefing() }
+            }
+        }
+    }
     public private(set) var projects: [Project] = []
     public var conversationType: ConversationType = .general
     public private(set) var isLoading = false
     public private(set) var error: String?
     public private(set) var pendingConfirmation: BundledConfirmation?
+    public private(set) var returnBriefing: String?
 
     // MARK: - Dependencies
 
@@ -58,6 +65,12 @@ public final class ChatViewModel {
     /// The currently active conversation for persistence.
     public private(set) var activeConversation: Conversation?
     public private(set) var savedConversations: [Conversation] = []
+
+    /// Days since last check-in before showing a return briefing (configurable from settings).
+    public var returnBriefingThresholdDays: Int = 14
+
+    /// Trust level for AI actions: "confirmAll" (default), "autoMinor", "autoAll".
+    public var aiTrustLevel: String = "confirmAll"
 
     // MARK: - Init
 
@@ -134,9 +147,31 @@ public final class ChatViewModel {
             messages.append(assistantMessage)
             await persistMessage(assistantMessage)
 
-            // If there are actions, create confirmation
+            // If there are actions, handle based on trust level
             if !parsed.actions.isEmpty {
-                pendingConfirmation = actionExecutor.generateConfirmation(from: parsed.actions)
+                if aiTrustLevel == "autoAll" {
+                    // Auto-apply all actions
+                    let confirmation = actionExecutor.generateConfirmation(from: parsed.actions)
+                    try await actionExecutor.execute(confirmation)
+                    Log.ai.info("Auto-applied \(confirmation.acceptedCount) actions (trust: autoAll)")
+                } else if aiTrustLevel == "autoMinor" {
+                    // Auto-apply minor actions, confirm major ones
+                    let minorActions = parsed.actions.filter { !$0.isMajor }
+                    let majorActions = parsed.actions.filter { $0.isMajor }
+
+                    if !minorActions.isEmpty {
+                        let minorConfirmation = actionExecutor.generateConfirmation(from: minorActions)
+                        try await actionExecutor.execute(minorConfirmation)
+                        Log.ai.info("Auto-applied \(minorConfirmation.acceptedCount) minor actions")
+                    }
+
+                    if !majorActions.isEmpty {
+                        pendingConfirmation = actionExecutor.generateConfirmation(from: majorActions)
+                    }
+                } else {
+                    // confirmAll — show all actions for confirmation
+                    pendingConfirmation = actionExecutor.generateConfirmation(from: parsed.actions)
+                }
             }
 
             Log.ai.info("Chat: received response with \(parsed.actions.count) actions")
@@ -181,6 +216,72 @@ public final class ChatViewModel {
         pendingConfirmation = confirmation
     }
 
+    // MARK: - Return Briefing
+
+    /// Check if the selected project needs a return briefing (dormant for > threshold days).
+    private func checkReturnBriefing() async {
+        returnBriefing = nil
+        guard let projectId = selectedProjectId,
+              let project = projects.first(where: { $0.id == projectId }) else { return }
+
+        do {
+            let lastCheckIn = try await checkInRepo.fetchLatest(forProject: projectId)
+            let daysSinceCheckIn: Int
+            if let checkIn = lastCheckIn {
+                daysSinceCheckIn = Calendar.current.dateComponents([.day], from: checkIn.timestamp, to: Date()).day ?? 0
+            } else {
+                // No check-ins ever — treat as dormant
+                daysSinceCheckIn = returnBriefingThresholdDays + 1
+            }
+
+            guard daysSinceCheckIn >= returnBriefingThresholdDays else { return }
+
+            // Generate a return briefing via the LLM
+            isLoading = true
+            let projectContext = try await buildProjectContext()
+            let systemPrompt = PromptTemplates.reEntry(projectName: project.name)
+            let userPrompt = "I'm returning to this project after \(daysSinceCheckIn) days. Give me a brief re-entry summary."
+            let payload = [
+                LLMMessage(role: .system, content: systemPrompt),
+                LLMMessage(role: .user, content: userPrompt + (projectContext.map { "\n\n" + formatContext($0) } ?? ""))
+            ]
+
+            let config = LLMRequestConfig()
+            let response = try await llmClient.send(messages: payload, config: config)
+            returnBriefing = response.content
+            conversationType = .reEntry
+
+            Log.ai.info("Generated return briefing for '\(project.name)' (dormant \(daysSinceCheckIn) days)")
+        } catch {
+            Log.ai.error("Failed to check return briefing: \(error)")
+        }
+        isLoading = false
+    }
+
+    /// Dismiss the return briefing card.
+    public func dismissReturnBriefing() {
+        returnBriefing = nil
+    }
+
+    /// Format project context as a text summary for the LLM.
+    private func formatContext(_ ctx: ProjectContext) -> String {
+        var lines: [String] = []
+        lines.append("Project: \(ctx.project.name) (\(ctx.project.lifecycleState.rawValue))")
+        lines.append("Phases: \(ctx.phases.count), Milestones: \(ctx.milestones.count), Tasks: \(ctx.tasks.count)")
+        let blocked = ctx.tasks.filter { $0.status == .blocked }
+        if !blocked.isEmpty {
+            lines.append("Blocked tasks: \(blocked.map(\.name).joined(separator: ", "))")
+        }
+        let inProgress = ctx.tasks.filter { $0.status == .inProgress }
+        if !inProgress.isEmpty {
+            lines.append("In progress: \(inProgress.map(\.name).joined(separator: ", "))")
+        }
+        if !ctx.frequentlyDeferredTasks.isEmpty {
+            lines.append("Frequently deferred: \(ctx.frequentlyDeferredTasks.map(\.name).joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - Helpers
 
     public func clearChat() {
@@ -188,6 +289,7 @@ public final class ChatViewModel {
         pendingConfirmation = nil
         error = nil
         activeConversation = nil
+        returnBriefing = nil
     }
 
     // MARK: - Conversation Persistence

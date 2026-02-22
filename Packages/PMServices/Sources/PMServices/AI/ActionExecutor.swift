@@ -32,6 +32,9 @@ public struct BundledConfirmation: Sendable {
     public var acceptedActions: [AIAction] { changes.filter(\.accepted).map(\.action) }
 }
 
+/// Callback for notifying sync layer of entity changes from action execution.
+public typealias ChangeTracker = @Sendable (_ entityType: String, _ entityId: UUID, _ changeType: String) -> Void
+
 /// Generates confirmation summaries and executes accepted actions.
 public struct ActionExecutor: Sendable {
     private let taskRepo: TaskRepositoryProtocol
@@ -39,6 +42,9 @@ public struct ActionExecutor: Sendable {
     private let subtaskRepo: SubtaskRepositoryProtocol
     private let projectRepo: ProjectRepositoryProtocol
     private let documentRepo: DocumentRepositoryProtocol?
+
+    /// Optional callback invoked after each entity mutation for sync tracking.
+    public var onChangeTracked: ChangeTracker?
 
     public init(
         taskRepo: TaskRepositoryProtocol,
@@ -78,12 +84,14 @@ public struct ActionExecutor: Sendable {
             if var task = try await taskRepo.fetch(id: taskId) {
                 task.status = .completed
                 try await taskRepo.save(task)
+                onChangeTracked?("task", taskId, "update")
             }
 
         case .updateNotes(let projectId, let notes):
             if var project = try await projectRepo.fetch(id: projectId) {
                 project.notes = notes
                 try await projectRepo.save(project)
+                onChangeTracked?("project", projectId, "update")
             }
 
         case .flagBlocked(let taskId, let blockedType, let reason):
@@ -91,6 +99,7 @@ public struct ActionExecutor: Sendable {
                 task.blockedType = blockedType
                 task.blockedReason = reason
                 try await taskRepo.save(task)
+                onChangeTracked?("task", taskId, "update")
             }
 
         case .setWaiting(let taskId, let reason, let checkBackDate):
@@ -99,11 +108,13 @@ public struct ActionExecutor: Sendable {
                 task.blockedReason = reason
                 task.waitingCheckBackDate = checkBackDate
                 try await taskRepo.save(task)
+                onChangeTracked?("task", taskId, "update")
             }
 
         case .createSubtask(let taskId, let name):
             let subtask = Subtask(taskId: taskId, name: name)
             try await subtaskRepo.save(subtask)
+            onChangeTracked?("subtask", subtask.id, "create")
 
         case .updateDocument(let documentId, let content):
             if let documentRepo, var doc = try await documentRepo.fetch(id: documentId) {
@@ -111,12 +122,14 @@ public struct ActionExecutor: Sendable {
                 doc.version += 1
                 doc.updatedAt = Date()
                 try await documentRepo.save(doc)
+                onChangeTracked?("document", documentId, "update")
             }
 
         case .incrementDeferred(let taskId):
             if var task = try await taskRepo.fetch(id: taskId) {
                 task.timesDeferred += 1
                 try await taskRepo.save(task)
+                onChangeTracked?("task", taskId, "update")
             }
 
         case .suggestScopeReduction:
@@ -126,6 +139,7 @@ public struct ActionExecutor: Sendable {
         case .createMilestone(let phaseId, let name):
             let milestone = Milestone(phaseId: phaseId, name: name)
             try await milestoneRepo.save(milestone)
+            onChangeTracked?("milestone", milestone.id, "create")
 
         case .createTask(let milestoneId, let name, let priority, let effortType):
             let task = PMTask(
@@ -135,11 +149,13 @@ public struct ActionExecutor: Sendable {
                 effortType: effortType ?? .quickWin
             )
             try await taskRepo.save(task)
+            onChangeTracked?("task", task.id, "create")
 
         case .createDocument(let projectId, let title, let content):
             if let documentRepo {
                 let doc = Document(projectId: projectId, type: .other, title: title, content: content)
                 try await documentRepo.save(doc)
+                onChangeTracked?("document", doc.id, "create")
             }
         }
     }

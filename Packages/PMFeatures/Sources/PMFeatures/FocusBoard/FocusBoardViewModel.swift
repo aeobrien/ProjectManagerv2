@@ -1,6 +1,8 @@
 import Foundation
+import PMData
 import PMDomain
 import PMDesignSystem
+import PMServices
 import PMUtilities
 import os
 
@@ -13,10 +15,16 @@ public final class FocusBoardViewModel {
     public private(set) var focusedProjects: [Project] = []
     public private(set) var categories: [PMDomain.Category] = []
     public private(set) var tasksByProject: [UUID: [PMTask]] = [:]
+    public private(set) var milestoneNameByTaskId: [UUID: String] = [:]
     public private(set) var healthByProject: [UUID: ProjectHealthSignals] = [:]
     public private(set) var diversityViolations: [DiversityViolation] = []
     public private(set) var isLoading = false
     public private(set) var error: String?
+
+    /// Per-project check-in urgency computed during load.
+    public private(set) var urgencyByProject: [UUID: CheckInUrgency] = [:]
+    /// Per-project last check-in record for use by CheckInView.
+    public private(set) var lastCheckInByProject: [UUID: CheckInRecord] = [:]
 
     /// Per-project toggle to show all tasks (bypassing curation).
     public var showAllTasks: Set<UUID> = []
@@ -40,6 +48,15 @@ public final class FocusBoardViewModel {
     private let phaseRepo: PhaseRepositoryProtocol
     private let checkInRepo: CheckInRepositoryProtocol
 
+    /// Optional check-in flow manager for computing urgency and navigating to check-ins.
+    public var checkInFlowManager: CheckInFlowManager?
+
+    /// Optional sync manager for tracking changes.
+    public var syncManager: SyncManager?
+
+    /// Optional notification manager for scheduling notifications.
+    public var notificationManager: NotificationManager?
+
     // MARK: - Init
 
     public init(
@@ -48,7 +65,8 @@ public final class FocusBoardViewModel {
         taskRepo: TaskRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
         phaseRepo: PhaseRepositoryProtocol,
-        checkInRepo: CheckInRepositoryProtocol
+        checkInRepo: CheckInRepositoryProtocol,
+        checkInFlowManager: CheckInFlowManager? = nil
     ) {
         self.projectRepo = projectRepo
         self.categoryRepo = categoryRepo
@@ -56,6 +74,7 @@ public final class FocusBoardViewModel {
         self.milestoneRepo = milestoneRepo
         self.phaseRepo = phaseRepo
         self.checkInRepo = checkInRepo
+        self.checkInFlowManager = checkInFlowManager
     }
 
     // MARK: - Loading
@@ -69,6 +88,9 @@ public final class FocusBoardViewModel {
 
             var tMap: [UUID: [PMTask]] = [:]
             var hMap: [UUID: ProjectHealthSignals] = [:]
+            var msNames: [UUID: String] = [:]
+            var uMap: [UUID: CheckInUrgency] = [:]
+            var ciMap: [UUID: CheckInRecord] = [:]
 
             for project in focusedProjects {
                 // Gather all tasks across all milestones in all phases
@@ -78,6 +100,9 @@ public final class FocusBoardViewModel {
                     let milestones = try await milestoneRepo.fetchAll(forPhase: phase.id)
                     for ms in milestones {
                         let tasks = try await taskRepo.fetchAll(forMilestone: ms.id)
+                        for task in tasks {
+                            msNames[task.id] = ms.name
+                        }
                         allTasks.append(contentsOf: tasks)
                     }
                 }
@@ -90,13 +115,56 @@ public final class FocusBoardViewModel {
                     tasks: allTasks,
                     lastCheckInDate: lastCheckIn?.timestamp
                 )
+
+                // Check-in urgency
+                if let manager = checkInFlowManager {
+                    uMap[project.id] = manager.urgency(for: project, lastCheckIn: lastCheckIn)
+                    if let lastCheckIn {
+                        ciMap[project.id] = lastCheckIn
+                    }
+                }
             }
 
             tasksByProject = tMap
+            milestoneNameByTaskId = msNames
             healthByProject = hMap
+            urgencyByProject = uMap
+            lastCheckInByProject = ciMap
             diversityViolations = FocusManager.diversityViolations(focusedProjects: focusedProjects)
 
+            // Schedule notifications for approaching deadlines and check-in reminders
+            if let nm = notificationManager {
+                for project in focusedProjects {
+                    // Deadline approaching notifications
+                    let tasks = tMap[project.id] ?? []
+                    for task in tasks {
+                        if let deadline = task.deadline {
+                            let hoursUntil = Calendar.current.dateComponents([.hour], from: Date(), to: deadline).hour ?? 0
+                            if hoursUntil > 0 && hoursUntil <= 24 {
+                                let notif = NotificationManager.deadlineApproaching(
+                                    name: task.name, projectName: project.name,
+                                    deadline: deadline, entityId: task.id
+                                )
+                                _ = try? await nm.scheduleIfAllowed(notif)
+                            }
+                        }
+                    }
+
+                    // Check-in reminder notifications
+                    let urgency = uMap[project.id] ?? .none
+                    if urgency != .none {
+                        let notif = NotificationManager.checkInReminder(
+                            projectName: project.name, projectId: project.id
+                        )
+                        _ = try? await nm.scheduleIfAllowed(notif)
+                    }
+                }
+            }
+
             Log.focus.info("Focus Board loaded: \(self.focusedProjects.count) projects")
+        } catch is CancellationError {
+            // View was dismissed during async load — not a real error
+            return
         } catch {
             self.error = error.localizedDescription
             Log.focus.error("Failed to load Focus Board: \(error)")
@@ -166,6 +234,7 @@ public final class FocusBoardViewModel {
         }
         do {
             try await projectRepo.save(updated)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -174,6 +243,7 @@ public final class FocusBoardViewModel {
         let updated = FocusManager.unfocus(project: project, to: destination)
         do {
             try await projectRepo.save(updated)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -191,6 +261,7 @@ public final class FocusBoardViewModel {
         updated.lifecycleState = .focused
         do {
             try await projectRepo.save(updated)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -216,6 +287,7 @@ public final class FocusBoardViewModel {
 
         do {
             try await taskRepo.save(updated)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -230,6 +302,59 @@ public final class FocusBoardViewModel {
                 return
             }
         }
+    }
+
+    // MARK: - Task Status Actions
+
+    /// Block a task with a type and reason.
+    public func blockTask(_ task: PMTask, type: BlockedType, reason: String) async {
+        var updated = task
+        updated.status = .blocked
+        updated.kanbanColumn = ItemStatus.blocked.kanbanColumn
+        updated.blockedType = type
+        updated.blockedReason = reason
+        do {
+            try await taskRepo.save(updated)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
+            await load()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Set a task to waiting with a reason.
+    public func setWaiting(_ task: PMTask, reason: String) async {
+        var updated = task
+        updated.status = .waiting
+        updated.kanbanColumn = ItemStatus.waiting.kanbanColumn
+        updated.waitingReason = reason
+        do {
+            try await taskRepo.save(updated)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
+
+            // Schedule waiting check-back notification
+            if let nm = notificationManager {
+                let projectName = focusedProjects.first(where: { tasksByProject[$0.id]?.contains(where: { $0.id == task.id }) == true })?.name ?? "Project"
+                let notif = NotificationManager.waitingCheckBack(taskName: task.name, projectName: projectName, taskId: task.id)
+                _ = try? await nm.scheduleIfAllowed(notif)
+            }
+
+            await load()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Unblock a task, returning it to in-progress.
+    public func unblockTask(_ task: PMTask) async {
+        var updated = task
+        updated.status = .inProgress
+        updated.kanbanColumn = ItemStatus.inProgress.kanbanColumn
+        updated.blockedType = nil
+        updated.blockedReason = nil
+        updated.waitingReason = nil
+        updated.waitingCheckBackDate = nil
+        do {
+            try await taskRepo.save(updated)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
+            await load()
+        } catch { self.error = error.localizedDescription }
     }
 
     // MARK: - Health Signal Badges

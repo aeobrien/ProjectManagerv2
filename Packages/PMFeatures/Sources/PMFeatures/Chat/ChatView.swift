@@ -78,6 +78,11 @@ public struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    // Return briefing card
+                    if let briefing = viewModel.returnBriefing {
+                        returnBriefingCard(briefing)
+                    }
+
                     ForEach(viewModel.messages) { message in
                         MessageBubble(message: message)
                             .id(message.id)
@@ -160,6 +165,40 @@ public struct ChatView: View {
         .background(.blue.opacity(0.05))
     }
 
+    // MARK: - Return Briefing Card
+
+    private func returnBriefingCard(_ briefing: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.counterclockwise.circle.fill")
+                    .foregroundStyle(.purple)
+                Text("Welcome Back")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button {
+                    viewModel.dismissReturnBriefing()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(briefing)
+                .font(.callout)
+                .foregroundStyle(.primary)
+        }
+        .padding()
+        .background(.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(.purple.opacity(0.2), lineWidth: 1)
+        )
+        .padding(.horizontal)
+    }
+
     // MARK: - Input Bar
 
     private var inputBar: some View {
@@ -234,7 +273,12 @@ struct MessageBubble: View {
     private var backgroundColor: Color {
         switch message.role {
         case .user: .blue
-        case .assistant: Color(.controlBackgroundColor)
+        case .assistant:
+            #if os(macOS)
+            Color(.controlBackgroundColor)
+            #else
+            Color(.systemGray6)
+            #endif
         case .system: .secondary.opacity(0.2)
         }
     }

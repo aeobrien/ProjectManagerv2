@@ -137,7 +137,9 @@ public struct QuickCaptureView: View {
             }
         }
         .padding()
+        #if os(macOS)
         .frame(width: 400)
+        #endif
         .task {
             await viewModel.loadCategories()
         }

@@ -37,6 +37,10 @@ extension Document: @retroactive FetchableRecord, @retroactive PersistableRecord
     public static let databaseTableName = "document"
 }
 
+extension DocumentVersion: @retroactive FetchableRecord, @retroactive PersistableRecord {
+    public static let databaseTableName = "documentVersion"
+}
+
 extension Dependency: @retroactive FetchableRecord, @retroactive PersistableRecord {
     public static let databaseTableName = "dependency"
 }

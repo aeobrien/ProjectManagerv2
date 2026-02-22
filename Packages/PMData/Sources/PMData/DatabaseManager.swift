@@ -184,6 +184,18 @@ public final class DatabaseManager: Sendable {
             }
         }
 
+        migrator.registerMigration("v2-documentVersion") { db in
+            try db.create(table: "documentVersion") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("documentId", .text).notNull()
+                    .references("document", onDelete: .cascade)
+                t.column("version", .integer).notNull()
+                t.column("title", .text).notNull()
+                t.column("content", .text).notNull()
+                t.column("savedAt", .datetime).notNull()
+            }
+        }
+
         try migrator.migrate(dbQueue)
     }
 

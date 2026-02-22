@@ -8,6 +8,7 @@ public struct ProjectDetailView: View {
     var roadmapViewModel: ProjectRoadmapViewModel?
     var documentViewModel: DocumentViewModel?
     @State private var selectedTab: DetailTab = .roadmap
+    @State private var showRetrospective = false
 
     public init(
         viewModel: ProjectDetailViewModel,
@@ -21,12 +22,73 @@ public struct ProjectDetailView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            // Retrospective prompt banner
+            if let phase = viewModel.phaseNeedingRetrospective {
+                retrospectiveBanner(phase: phase)
+            }
+
             projectHeader
             Divider()
             tabContent
         }
         .navigationTitle(viewModel.project.name)
         .task { await viewModel.load() }
+        .sheet(isPresented: $showRetrospective) {
+            if let manager = viewModel.retrospectiveManager {
+                NavigationStack {
+                    RetrospectiveView(manager: manager, project: viewModel.project)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") {
+                                    showRetrospective = false
+                                    viewModel.dismissRetrospectivePrompt()
+                                }
+                            }
+                        }
+                }
+                #if os(macOS)
+                .frame(minWidth: 500, minHeight: 400)
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Retrospective Banner
+
+    private func retrospectiveBanner(phase: Phase) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "flag.checkered")
+                .foregroundStyle(.green)
+            Text("Phase \"\(phase.name)\" is complete!")
+                .font(.subheadline)
+                .fontWeight(.medium)
+            Spacer()
+            Button("Start Retrospective") {
+                showRetrospective = true
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            if let manager = viewModel.retrospectiveManager {
+                Menu("Snooze") {
+                    Button("1 Day") {
+                        manager.snooze(phase, days: 1)
+                        viewModel.dismissRetrospectivePrompt()
+                    }
+                    Button("3 Days") {
+                        manager.snooze(phase, days: 3)
+                        viewModel.dismissRetrospectivePrompt()
+                    }
+                    Button("1 Week") {
+                        manager.snooze(phase, days: 7)
+                        viewModel.dismissRetrospectivePrompt()
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.green.opacity(0.08))
     }
 
     // MARK: - Header
@@ -144,7 +206,7 @@ struct OverviewTabView: View {
                     HStack {
                         Text(phase.name)
                         Spacer()
-                        Text(phase.status.rawValue.capitalized)
+                        Text(phase.status.displayName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
