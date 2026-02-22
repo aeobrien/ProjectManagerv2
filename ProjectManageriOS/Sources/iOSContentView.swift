@@ -305,15 +305,50 @@ struct iOSContentView: View {
             quickCaptureVM.syncManager = syncMgr
             self.quickCaptureVM = quickCaptureVM
 
-            // Initialize export service
-            let exportBackend = FileExportBackend()
+            // Initialize export service with backend based on Life Planner settings
             let exportDir = dbDir.appendingPathComponent("exports", isDirectory: true)
             try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
-            let exportConfig = ExportConfig(
-                destination: .jsonFile,
-                filePath: exportDir.appendingPathComponent("export.json").path
+            let defaultExportPath = exportDir.appendingPathComponent("export.json").path
+
+            let exportBackend: ExportBackendProtocol
+            let exportConfig: ExportConfig
+            switch settingsManager.lifePlannerSyncMethod {
+            case "rest":
+                exportBackend = APIExportBackend()
+                exportConfig = ExportConfig(
+                    destination: .api,
+                    apiEndpoint: settingsManager.lifePlannerAPIEndpoint.isEmpty ? nil : settingsManager.lifePlannerAPIEndpoint,
+                    apiKey: settingsManager.lifePlannerAPIKey.isEmpty ? nil : settingsManager.lifePlannerAPIKey
+                )
+            default:
+                exportBackend = FileExportBackend()
+                let filePath = settingsManager.lifePlannerFilePath.isEmpty ? defaultExportPath : settingsManager.lifePlannerFilePath
+                exportConfig = ExportConfig(
+                    destination: .jsonFile,
+                    filePath: filePath
+                )
+            }
+
+            let expService = ExportService(backend: exportBackend, config: exportConfig)
+
+            let exportDataProvider = RepositoryExportDataProvider(
+                projectRepo: projectRepo,
+                categoryRepo: categoryRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                dependencyRepo: dependencyRepo
             )
-            self.exportService = ExportService(backend: exportBackend, config: exportConfig)
+            await expService.setDataProvider(exportDataProvider)
+            self.exportService = expService
+
+            // Wire debounced export into ActionExecutor
+            if settingsManager.lifePlannerSyncEnabled {
+                let exportRef = expService
+                actionExecutor.onLifePlannerExport = {
+                    Task { await exportRef.triggerDebouncedExport() }
+                }
+            }
 
             self.crossProjectRoadmapVM = CrossProjectRoadmapViewModel(
                 projectRepo: projectRepo,
@@ -356,6 +391,11 @@ struct iOSContentView: View {
             // Start periodic sync if enabled
             if settingsManager.syncEnabled {
                 syncMgr.startPeriodicSync()
+            }
+
+            // Trigger Life Planner export on launch if enabled
+            if settingsManager.lifePlannerSyncEnabled {
+                _ = await expService.triggerLifePlannerExport()
             }
 
             // Update widget shared data

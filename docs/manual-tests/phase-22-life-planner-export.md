@@ -1,27 +1,73 @@
 # Phase 22: Life Planner Export — Manual Test Brief
 
 ## Automated Tests
-- **17 tests** in 4 suites, passing via `cd Packages/PMServices && swift test`
+- **18 tests** in 6 suites, passing via `cd Packages/PMServices && swift test`
+- All **581 tests** pass across all 6 packages (no regressions).
 
 ### Suites
-1. **ExportPayloadTests** (5 tests) — Validates Codable round-trip encoding/decoding for ExportedTask, ExportedProjectSummary, and ExportPayload structures, ExportPayloadBuilder assembly from domain objects, and empty payload edge cases.
-2. **ExportServiceTests** (8 tests) — Validates actor-based export with debounce timing, APIExportBackend HTTP POST with Bearer auth, FileExportBackend JSON file output, ExportConfig validation, ExportStatus state transitions (idle/exporting/completed/failed), error handling for network failures, retry logic, and concurrent export request coalescing.
-3. **ExportResultTests** (2 tests) — Validates ExportResult success and failure cases with associated metadata.
-4. **ExportConfigTests** (2 tests) — Validates ExportConfig initialization with API endpoint and auth token, and file path configuration for FileExportBackend.
+1. **ExportPayloadTests** (5 tests) — Validates ExportedTask and ExportedProjectSummary creation, JSON round-trip encoding, ExportPayloadBuilder assembly with correct task→milestone→phase→project mapping, multi-project mapping correctness.
+2. **ExportServiceTests** (8 tests) — Validates export success/failure, status tracking, error type mapping (network/auth/config), debounce via shouldExport()/recordTrigger(), config update, and multiple export count accumulation.
+3. **ExportConfigTests** (2 tests) — Validates default config values and config equality.
+4. **ExportErrorTests** (1 test) — Validates error equality comparison.
+5. **ExportDestinationTests** (1 test) — Validates raw values for api/jsonFile destinations.
+6. **ExportResultTests** (1 test) — Validates all result case raw values.
 
 ## Manual Verification Checklist
-- [ ] ExportPayloadBuilder produces a valid ExportPayload from real project and task data
+
+### Payload Construction
+- [ ] ExportPayloadBuilder correctly maps tasks to their owning project via milestone→phase→project chain
+- [ ] Tasks in different projects appear with correct projectName and categoryName
+- [ ] Project summaries include accurate taskCount and completedTaskCount
 - [ ] ExportPayload encodes to JSON and decodes back without data loss
-- [ ] APIExportBackend sends an HTTP POST to the configured endpoint with Bearer auth header
-- [ ] APIExportBackend includes the full ExportPayload as the request body
-- [ ] FileExportBackend writes a valid JSON file to the configured path
-- [ ] ExportService debounces rapid export requests and only executes one export
-- [ ] ExportStatus transitions correctly through idle, exporting, completed, and failed states
-- [ ] Export errors (network failure, auth failure) are surfaced via ExportStatus
-- [ ] Concurrent export requests are coalesced and do not produce duplicate exports
-- [ ] ExportConfig correctly stores API endpoint, auth token, and file path settings
+
+### Export Backends
+- [ ] APIExportBackend sends HTTP POST to configured endpoint with Bearer auth header
+- [ ] APIExportBackend handles 2xx success, 401/403 auth errors, and other HTTP errors
+- [ ] FileExportBackend writes pretty-printed JSON to configured file path
+- [ ] Backend selection follows lifePlannerSyncMethod setting (rest → API, file → File)
+
+### Export Triggers
+- [ ] On-launch export: When lifePlannerSyncEnabled is true, export runs during app initialization
+- [ ] Data-change export: ActionExecutor mutations trigger debounced export via onLifePlannerExport callback
+- [ ] Manual export: "Export Now" button in Life Planner Sync section triggers triggerLifePlannerExport()
+- [ ] Manual export: "Export Now" button in Data Export section also triggers triggerLifePlannerExport()
+- [ ] Debounce prevents rapid-fire exports (5-second default interval)
+
+### Settings Integration
+- [ ] Life Planner Sync section shows enable toggle, method picker
+- [ ] REST API method shows endpoint and API key fields
+- [ ] File Export method shows file path field
+- [ ] MySQL method shows placeholder text
+- [ ] Settings changes (endpoint, API key, file path) persist to UserDefaults
+- [ ] Export service reconfigures backend based on selected method at app launch
+
+### Export Status
+- [ ] Last export result shows success (green check) or failure (red X) icon
+- [ ] Last export date shows relative time
+- [ ] Export count is tracked across the session
+
+### Wiring
+- [ ] ExportService created with correct backend in macOS ContentView
+- [ ] ExportService created with correct backend in iOS iOSContentView
+- [ ] RepositoryExportDataProvider wired with all required repos in both ContentViews
+- [ ] ActionExecutor.onLifePlannerExport wired when lifePlannerSyncEnabled is true
+- [ ] ExportService passed to SettingsView
+
+### Platform Parity
+- [ ] macOS and iOS export wiring is identical
+- [ ] Both platforms trigger on-launch export when enabled
 
 ## Files Created/Modified
+
 ### New Files
-- `Packages/PMServices/Sources/PMServices/LifePlannerExport/ExportPayload.swift` — Codable export structures (ExportedTask, ExportedProjectSummary, ExportPayload) and ExportPayloadBuilder
-- `Packages/PMServices/Sources/PMServices/LifePlannerExport/ExportService.swift` — Actor-based export service with debounce, APIExportBackend (HTTP POST with Bearer auth), FileExportBackend (JSON file), ExportConfig, and ExportStatus tracking
+- `Packages/PMServices/Sources/PMServices/LifePlannerExport/RepositoryExportDataProvider.swift` — Fetches focused project data from repos for export payload building
+
+### Modified Files
+- `Packages/PMServices/Sources/PMServices/LifePlannerExport/ExportPayload.swift` — Fixed ExportPayloadBuilder to correctly map tasks via milestone→phase→project chain, added `phases` parameter
+- `Packages/PMServices/Sources/PMServices/LifePlannerExport/ExportService.swift` — Added LifePlannerDataProvider protocol, setDataProvider(), triggerLifePlannerExport(), triggerDebouncedExport(), updateBackend()
+- `Packages/PMServices/Sources/PMServices/AI/ActionExecutor.swift` — Added onLifePlannerExport callback, called after mutations
+- `Packages/PMData/Sources/PMData/Settings/SettingsManager.swift` — Added lifePlannerAPIEndpoint, lifePlannerAPIKey, lifePlannerFilePath properties
+- `Packages/PMFeatures/Sources/PMFeatures/Settings/SettingsView.swift` — Added connection config fields per method, fixed Export Now to use triggerLifePlannerExport()
+- `ProjectManager/Sources/ContentView.swift` — Export service backend selection, data provider wiring, on-launch export, ActionExecutor export hook
+- `ProjectManageriOS/Sources/iOSContentView.swift` — Same wiring as macOS
+- `Packages/PMServices/Tests/PMServicesTests/ExportServiceTests.swift` — Fixed builder test to pass phases, added multi-project mapping test

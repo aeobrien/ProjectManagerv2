@@ -92,7 +92,7 @@ struct ExportPayloadTests {
         #expect(decoded.tasks.count == 1)
     }
 
-    @Test("ExportPayloadBuilder builds payload")
+    @Test("ExportPayloadBuilder builds payload with correct project mapping")
     func buildPayload() {
         let builder = ExportPayloadBuilder()
         let catId = UUID()
@@ -100,22 +100,72 @@ struct ExportPayloadTests {
         let phaseId = UUID()
         let msId = UUID()
 
-        let projects = [Project(name: "App", categoryId: catId, lifecycleState: .focused)]
-        let categories = [PMDomain.Category(name: "Software")]
-        let milestones = [Milestone(id: msId, phaseId: phaseId, name: "MVP")]
-        let tasks = [PMTask(milestoneId: msId, name: "Build login")]
+        let project = Project(id: projectId, name: "App", categoryId: catId, lifecycleState: .focused)
+        let category = PMDomain.Category(id: catId, name: "Software")
+        let phase = Phase(id: phaseId, projectId: projectId, name: "Phase 1")
+        let milestone = Milestone(id: msId, phaseId: phaseId, name: "MVP")
+        let task = PMTask(milestoneId: msId, name: "Build login")
 
         let payload = builder.build(
-            projects: projects,
-            categories: categories,
-            milestones: milestones,
-            tasks: tasks,
+            projects: [project],
+            categories: [category],
+            phases: [phase],
+            milestones: [milestone],
+            tasks: [task],
             dependencyNames: [:]
         )
 
         #expect(payload.tasks.count == 1)
         #expect(payload.tasks.first?.name == "Build login")
         #expect(payload.tasks.first?.milestoneName == "MVP")
+        #expect(payload.tasks.first?.projectName == "App")
+        #expect(payload.tasks.first?.categoryName == "Software")
+
+        // Project summary should have correct task count
+        #expect(payload.projects.count == 1)
+        #expect(payload.projects.first?.taskCount == 1)
+    }
+
+    @Test("ExportPayloadBuilder maps tasks to correct projects across multiple projects")
+    func buildPayloadMultiProject() {
+        let builder = ExportPayloadBuilder()
+        let catId = UUID()
+        let proj1Id = UUID()
+        let proj2Id = UUID()
+        let phase1Id = UUID()
+        let phase2Id = UUID()
+        let ms1Id = UUID()
+        let ms2Id = UUID()
+
+        let projects = [
+            Project(id: proj1Id, name: "App A", categoryId: catId, lifecycleState: .focused),
+            Project(id: proj2Id, name: "App B", categoryId: catId, lifecycleState: .focused)
+        ]
+        let categories = [PMDomain.Category(id: catId, name: "Software")]
+        let phases = [
+            Phase(id: phase1Id, projectId: proj1Id, name: "P1"),
+            Phase(id: phase2Id, projectId: proj2Id, name: "P2")
+        ]
+        let milestones = [
+            Milestone(id: ms1Id, phaseId: phase1Id, name: "M1"),
+            Milestone(id: ms2Id, phaseId: phase2Id, name: "M2")
+        ]
+        let tasks = [
+            PMTask(milestoneId: ms1Id, name: "Task for A"),
+            PMTask(milestoneId: ms2Id, name: "Task for B")
+        ]
+
+        let payload = builder.build(
+            projects: projects, categories: categories, phases: phases,
+            milestones: milestones, tasks: tasks, dependencyNames: [:]
+        )
+
+        let taskA = payload.tasks.first { $0.name == "Task for A" }
+        let taskB = payload.tasks.first { $0.name == "Task for B" }
+        #expect(taskA?.projectName == "App A")
+        #expect(taskB?.projectName == "App B")
+        #expect(payload.projects.first { $0.name == "App A" }?.taskCount == 1)
+        #expect(payload.projects.first { $0.name == "App B" }?.taskCount == 1)
     }
 }
 

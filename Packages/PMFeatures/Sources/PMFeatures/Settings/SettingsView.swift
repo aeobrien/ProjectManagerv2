@@ -205,8 +205,7 @@ public struct SettingsView: View {
                         Button {
                             Task {
                                 isExporting = true
-                                let payload = ExportPayload(projects: [], tasks: [])
-                                let _ = await exportService.export(payload: payload)
+                                _ = await exportService.triggerLifePlannerExport()
                                 exportStatus = await exportService.currentStatus()
                                 isExporting = false
                             }
@@ -314,17 +313,81 @@ public struct SettingsView: View {
     private var lifePlannerSyncSection: some View {
         PMCard {
             VStack(alignment: .leading, spacing: 12) {
-                PMSectionHeader("Life Planner Sync", subtitle: "Sync projects with external life planner")
+                PMSectionHeader("Life Planner Sync", subtitle: "Export focused project data to your Life Planner")
 
                 Toggle("Enable sync", isOn: $settings.lifePlannerSyncEnabled)
 
                 if settings.lifePlannerSyncEnabled {
-                    Picker("Sync method", selection: $settings.lifePlannerSyncMethod) {
-                        Text("MySQL").tag("mysql")
+                    Picker("Export method", selection: $settings.lifePlannerSyncMethod) {
                         Text("REST API").tag("rest")
                         Text("File Export").tag("file")
+                        Text("MySQL").tag("mysql")
+                    }
+
+                    switch settings.lifePlannerSyncMethod {
+                    case "rest":
+                        TextField("API endpoint", text: $settings.lifePlannerAPIEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                        SecureField("API key (optional)", text: $settings.lifePlannerAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                    case "file":
+                        TextField("Export file path", text: $settings.lifePlannerFilePath)
+                            .textFieldStyle(.roundedBorder)
+                    case "mysql":
+                        Text("MySQL export requires a running MySQL server. Configure connection details in a future update.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    default:
+                        EmptyView()
+                    }
+
+                    if let exportService {
+                        Divider()
+
+                        HStack {
+                            Button {
+                                Task {
+                                    isExporting = true
+                                    await exportService.triggerLifePlannerExport()
+                                    exportStatus = await exportService.currentStatus()
+                                    isExporting = false
+                                }
+                            } label: {
+                                if isExporting {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Label("Export Now", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            .disabled(isExporting)
+
+                            Spacer()
+
+                            if let status = exportStatus {
+                                lifePlannerStatusView(status)
+                            }
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    private func lifePlannerStatusView(_ status: ExportStatus) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let result = status.lastResult {
+                HStack(spacing: 4) {
+                    Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(result == .success ? .green : .red)
+                    Text(result == .success ? "Success" : result.rawValue)
+                        .font(.caption)
+                }
+            }
+            if let date = status.lastExportDate {
+                Text(date, style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }

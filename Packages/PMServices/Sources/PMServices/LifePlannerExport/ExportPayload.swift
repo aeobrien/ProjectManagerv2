@@ -95,22 +95,32 @@ public struct ExportPayloadBuilder: Sendable {
     public init() {}
 
     /// Build an export payload from focused projects and their tasks.
+    ///
+    /// The mapping chain is: task → milestone (via milestoneId) → phase (via phaseId) → project (via projectId).
     public func build(
         projects: [Project],
         categories: [PMDomain.Category],
+        phases: [Phase],
         milestones: [Milestone],
         tasks: [PMTask],
         dependencyNames: [UUID: [String]]
     ) -> ExportPayload {
         let categoryMap = Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0.name) })
+        let projectMap = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        let phaseMap = Dictionary(uniqueKeysWithValues: phases.map { ($0.id, $0) })
+        let milestoneMap = Dictionary(uniqueKeysWithValues: milestones.map { ($0.id, $0) })
+
+        // Build milestone → project lookup: milestone.phaseId → phase.projectId
+        var milestoneToProject: [UUID: Project] = [:]
+        for ms in milestones {
+            if let phase = phaseMap[ms.phaseId], let project = projectMap[phase.projectId] {
+                milestoneToProject[ms.id] = project
+            }
+        }
 
         let projectSummaries = projects.map { project in
             let projectTasks = tasks.filter { task in
-                milestones.first(where: { $0.id == task.milestoneId })
-                    .flatMap { ms in
-                        let phase = project.id // We need phase→project mapping
-                        return ms.phaseId != UUID() ? true : false
-                    } ?? false
+                milestoneToProject[task.milestoneId]?.id == project.id
             }
 
             return ExportedProjectSummary(
@@ -125,8 +135,8 @@ public struct ExportPayloadBuilder: Sendable {
         }
 
         let exportedTasks = tasks.map { task in
-            let milestone = milestones.first { $0.id == task.milestoneId }
-            let project = projects.first { _ in true } // Simplified — in real use, map through phases
+            let milestone = milestoneMap[task.milestoneId]
+            let project = milestoneToProject[task.milestoneId]
 
             return ExportedTask(
                 id: task.id,

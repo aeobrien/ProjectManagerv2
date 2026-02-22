@@ -46,6 +46,9 @@ public struct ActionExecutor: Sendable {
     /// Optional callback invoked after each entity mutation for sync tracking.
     public var onChangeTracked: ChangeTracker?
 
+    /// Optional callback invoked after data mutations to trigger Life Planner export.
+    public var onLifePlannerExport: (@Sendable () -> Void)?
+
     public init(
         taskRepo: TaskRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
@@ -74,6 +77,11 @@ public struct ActionExecutor: Sendable {
             try await executeAction(action)
         }
         Log.ai.info("Executed \(confirmation.acceptedCount) AI actions")
+
+        // Trigger debounced Life Planner export after mutations
+        if confirmation.acceptedCount > 0 {
+            onLifePlannerExport?()
+        }
     }
 
     // MARK: - Action Execution

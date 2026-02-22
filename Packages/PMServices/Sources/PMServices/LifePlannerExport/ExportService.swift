@@ -123,11 +123,19 @@ public enum ExportError: Error, Sendable, Equatable {
 
 /// Manages exports with debouncing and status tracking.
 public actor ExportService {
-    private let backend: ExportBackendProtocol
+    private var backend: ExportBackendProtocol
     private let payloadBuilder: ExportPayloadBuilder
     private var config: ExportConfig
     private var status: ExportStatus
     private var lastTriggerDate: Date?
+
+    /// Data provider for building payloads from live repository data.
+    private var dataProvider: LifePlannerDataProvider?
+
+    /// Set the data provider for building payloads.
+    public func setDataProvider(_ provider: LifePlannerDataProvider) {
+        dataProvider = provider
+    }
 
     public init(
         backend: ExportBackendProtocol,
@@ -201,4 +209,77 @@ public actor ExportService {
     public func currentConfig() -> ExportConfig {
         config
     }
+
+    /// Update the backend implementation (e.g., switching between API and File).
+    public func updateBackend(_ newBackend: ExportBackendProtocol) {
+        backend = newBackend
+    }
+
+    /// Build a payload from live data and export it. Returns the result.
+    /// Uses the `dataProvider` to fetch current focused project data.
+    public func triggerLifePlannerExport() async -> ExportResult {
+        guard let provider = dataProvider else {
+            Log.data.error("Life Planner export triggered but no data provider configured")
+            return .configError
+        }
+
+        do {
+            let data = try await provider.fetchExportData()
+            let payload = payloadBuilder.build(
+                projects: data.projects,
+                categories: data.categories,
+                phases: data.phases,
+                milestones: data.milestones,
+                tasks: data.tasks,
+                dependencyNames: data.dependencyNames
+            )
+            return await export(payload: payload)
+        } catch {
+            Log.data.error("Failed to build export payload: \(error)")
+            status = ExportStatus(
+                lastExportDate: Date(),
+                lastResult: .configError,
+                exportCount: status.exportCount
+            )
+            return .configError
+        }
+    }
+
+    /// Trigger a debounced export — only exports if enough time has passed.
+    public func triggerDebouncedExport() async {
+        guard shouldExport() else { return }
+        recordTrigger()
+        _ = await triggerLifePlannerExport()
+    }
+}
+
+/// Data needed to build an export payload.
+public struct LifePlannerExportData: Sendable {
+    public let projects: [Project]
+    public let categories: [PMDomain.Category]
+    public let phases: [Phase]
+    public let milestones: [Milestone]
+    public let tasks: [PMTask]
+    public let dependencyNames: [UUID: [String]]
+
+    public init(
+        projects: [Project],
+        categories: [PMDomain.Category],
+        phases: [Phase],
+        milestones: [Milestone],
+        tasks: [PMTask],
+        dependencyNames: [UUID: [String]]
+    ) {
+        self.projects = projects
+        self.categories = categories
+        self.phases = phases
+        self.milestones = milestones
+        self.tasks = tasks
+        self.dependencyNames = dependencyNames
+    }
+}
+
+/// Protocol for fetching data to build Life Planner export payloads.
+public protocol LifePlannerDataProvider: Sendable {
+    func fetchExportData() async throws -> LifePlannerExportData
 }

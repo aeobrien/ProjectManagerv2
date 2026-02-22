@@ -44,6 +44,9 @@ public final class SettingsManager {
             Keys.syncEnabled: false,
             Keys.lifePlannerSyncEnabled: false,
             Keys.lifePlannerSyncMethod: "mysql",
+            Keys.lifePlannerAPIEndpoint: "",
+            Keys.lifePlannerAPIKey: "",
+            Keys.lifePlannerFilePath: "",
             Keys.integrationAPIEnabled: false,
             Keys.integrationAPIPort: 8420,
             Keys.returnBriefingThresholdDays: 14,
@@ -81,6 +84,9 @@ public final class SettingsManager {
         syncEnabled = defaults.bool(forKey: Keys.syncEnabled)
         lifePlannerSyncEnabled = defaults.bool(forKey: Keys.lifePlannerSyncEnabled)
         lifePlannerSyncMethod = defaults.string(forKey: Keys.lifePlannerSyncMethod) ?? "mysql"
+        lifePlannerAPIEndpoint = defaults.string(forKey: Keys.lifePlannerAPIEndpoint) ?? ""
+        lifePlannerAPIKey = defaults.string(forKey: Keys.lifePlannerAPIKey) ?? ""
+        lifePlannerFilePath = defaults.string(forKey: Keys.lifePlannerFilePath) ?? ""
         integrationAPIEnabled = defaults.bool(forKey: Keys.integrationAPIEnabled)
         integrationAPIPort = defaults.integer(forKey: Keys.integrationAPIPort).clamped(to: 1024...65535)
     }
@@ -213,6 +219,18 @@ public final class SettingsManager {
         didSet { defaults.set(lifePlannerSyncMethod, forKey: Keys.lifePlannerSyncMethod) }
     }
 
+    public var lifePlannerAPIEndpoint: String = "" {
+        didSet { defaults.set(lifePlannerAPIEndpoint, forKey: Keys.lifePlannerAPIEndpoint) }
+    }
+
+    public var lifePlannerAPIKey: String = "" {
+        didSet { defaults.set(lifePlannerAPIKey, forKey: Keys.lifePlannerAPIKey) }
+    }
+
+    public var lifePlannerFilePath: String = "" {
+        didSet { defaults.set(lifePlannerFilePath, forKey: Keys.lifePlannerFilePath) }
+    }
+
     // MARK: - Integration API
 
     public var integrationAPIEnabled: Bool = false {
@@ -252,6 +270,9 @@ private enum Keys {
     static let syncEnabled = "settings.syncEnabled"
     static let lifePlannerSyncEnabled = "settings.lifePlannerSyncEnabled"
     static let lifePlannerSyncMethod = "settings.lifePlannerSyncMethod"
+    static let lifePlannerAPIEndpoint = "settings.lifePlannerAPIEndpoint"
+    static let lifePlannerAPIKey = "settings.lifePlannerAPIKey"
+    static let lifePlannerFilePath = "settings.lifePlannerFilePath"
     static let integrationAPIEnabled = "settings.integrationAPIEnabled"
     static let integrationAPIPort = "settings.integrationAPIPort"
     static let returnBriefingThresholdDays = "settings.returnBriefingThresholdDays"
