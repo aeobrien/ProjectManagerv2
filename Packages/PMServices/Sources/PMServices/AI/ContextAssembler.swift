@@ -22,6 +22,9 @@ public struct ProjectContext: Sendable {
     public let tasks: [PMTask]
     public let recentCheckIns: [CheckInRecord]
     public let frequentlyDeferredTasks: [PMTask]
+    public let estimateAccuracy: Float?
+    public let suggestedMultiplier: Float?
+    public let accuracyTrend: (older: Float, newer: Float)?
 
     public init(
         project: Project,
@@ -29,7 +32,10 @@ public struct ProjectContext: Sendable {
         milestones: [Milestone] = [],
         tasks: [PMTask] = [],
         recentCheckIns: [CheckInRecord] = [],
-        frequentlyDeferredTasks: [PMTask] = []
+        frequentlyDeferredTasks: [PMTask] = [],
+        estimateAccuracy: Float? = nil,
+        suggestedMultiplier: Float? = nil,
+        accuracyTrend: (older: Float, newer: Float)? = nil
     ) {
         self.project = project
         self.phases = phases
@@ -37,6 +43,9 @@ public struct ProjectContext: Sendable {
         self.tasks = tasks
         self.recentCheckIns = recentCheckIns
         self.frequentlyDeferredTasks = frequentlyDeferredTasks
+        self.estimateAccuracy = estimateAccuracy
+        self.suggestedMultiplier = suggestedMultiplier
+        self.accuracyTrend = accuracyTrend
     }
 }
 
@@ -211,6 +220,20 @@ public struct ContextAssembler: Sendable {
                 "- \(formatter.string(from: $0.timestamp)) (\($0.depth.rawValue)): \($0.aiSummary.isEmpty ? "No summary" : $0.aiSummary)"
             }.joined(separator: "\n")
             sections.append("RECENT CHECK-INS:\n\(checkInList)")
+        }
+
+        // Estimate calibration data
+        if let accuracy = ctx.estimateAccuracy {
+            var estimateLines: [String] = []
+            estimateLines.append("Average accuracy ratio: \(String(format: "%.0f", accuracy * 100))% (actual vs estimated)")
+            if let multiplier = ctx.suggestedMultiplier {
+                estimateLines.append("Suggested pessimism multiplier: \(String(format: "%.1f", multiplier))x")
+            }
+            if let trend = ctx.accuracyTrend {
+                let direction = trend.newer >= trend.older ? "improving" : "declining"
+                estimateLines.append("Trend: \(direction) (\(String(format: "%.0f", trend.older * 100))% → \(String(format: "%.0f", trend.newer * 100))%)")
+            }
+            sections.append("ESTIMATE CALIBRATION:\n" + estimateLines.joined(separator: "\n"))
         }
 
         return sections.joined(separator: "\n\n")

@@ -88,7 +88,7 @@ public struct AnalyticsView: View {
                     if let trend = viewModel.accuracyTrend {
                         HStack(spacing: 4) {
                             Image(systemName: trend.newer >= trend.older ? "arrow.up.right" : "arrow.down.right")
-                                .foregroundStyle(trend.newer >= trend.older ? .green : .orange)
+                                .foregroundStyle(.secondary)
                             Text("Trend: \(Int(trend.older * 100))% → \(Int(trend.newer * 100))%")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -195,7 +195,7 @@ public struct AnalyticsView: View {
             Circle()
                 .trim(from: 0, to: CGFloat(min(value, 1.0)))
                 .stroke(
-                    value > 0.8 ? Color.green : value > 0.5 ? Color.orange : Color.red,
+                    Color.accentColor,
                     style: StrokeStyle(lineWidth: 6, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))

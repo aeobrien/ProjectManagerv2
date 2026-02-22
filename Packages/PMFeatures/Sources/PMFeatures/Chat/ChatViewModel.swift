@@ -386,13 +386,23 @@ public final class ChatViewModel {
         let recentCheckIns = try await checkInRepo.fetchAll(forProject: project.id)
         let frequentlyDeferred = allTasks.filter { $0.timesDeferred >= 3 }
 
+        // Compute estimate calibration data for AI awareness
+        let completedTasks = allTasks.filter { $0.status == .completed }
+        let tracker = EstimateTracker()
+        let accuracy = tracker.averageAccuracy(tasks: completedTasks)
+        let multiplier = tracker.suggestedMultiplier(tasks: completedTasks)
+        let trend = tracker.accuracyTrend(tasks: completedTasks)
+
         return ProjectContext(
             project: project,
             phases: phases,
             milestones: allMilestones,
             tasks: allTasks,
             recentCheckIns: Array(recentCheckIns.prefix(5)),
-            frequentlyDeferredTasks: frequentlyDeferred
+            frequentlyDeferredTasks: frequentlyDeferred,
+            estimateAccuracy: accuracy,
+            suggestedMultiplier: multiplier,
+            accuracyTrend: trend
         )
     }
 }

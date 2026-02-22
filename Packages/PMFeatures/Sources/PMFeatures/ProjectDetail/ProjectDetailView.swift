@@ -7,17 +7,20 @@ public struct ProjectDetailView: View {
     @Bindable var viewModel: ProjectDetailViewModel
     var roadmapViewModel: ProjectRoadmapViewModel?
     var documentViewModel: DocumentViewModel?
+    var analyticsViewModel: AnalyticsViewModel?
     @State private var selectedTab: DetailTab = .roadmap
     @State private var showRetrospective = false
 
     public init(
         viewModel: ProjectDetailViewModel,
         roadmapViewModel: ProjectRoadmapViewModel? = nil,
-        documentViewModel: DocumentViewModel? = nil
+        documentViewModel: DocumentViewModel? = nil,
+        analyticsViewModel: AnalyticsViewModel? = nil
     ) {
         self.viewModel = viewModel
         self.roadmapViewModel = roadmapViewModel
         self.documentViewModel = documentViewModel
+        self.analyticsViewModel = analyticsViewModel
     }
 
     public var body: some View {
@@ -167,6 +170,12 @@ public struct ProjectDetailView: View {
                 }
             case .overview:
                 OverviewTabView(viewModel: viewModel)
+            case .analytics:
+                if let analyticsVM = analyticsViewModel {
+                    AnalyticsView(viewModel: analyticsVM, project: viewModel.project)
+                } else {
+                    PMEmptyState(icon: "chart.bar", title: "Analytics", message: "Analytics not available.")
+                }
             }
         }
     }
@@ -176,6 +185,7 @@ enum DetailTab: String, CaseIterable {
     case roadmap = "Roadmap"
     case timeline = "Timeline"
     case documents = "Documents"
+    case analytics = "Analytics"
     case overview = "Overview"
 }
 

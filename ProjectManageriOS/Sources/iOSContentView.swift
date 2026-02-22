@@ -140,7 +140,13 @@ struct iOSContentView: View {
                 DispatchQueue.main.async { docVMCache[project.id] = vm }
                 return vm
             }()
-            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM)
+            let analyticsVM = AnalyticsViewModel(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo
+            )
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM)
         }
     }
 
