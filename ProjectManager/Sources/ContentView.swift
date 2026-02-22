@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var knowledgeBaseManager: KnowledgeBaseManager?
     @State private var syncManager: SyncManager?
     @State private var httpServer: HTTPServer?
+    @State private var reviewManager: ProjectReviewManager?
     @State private var initError: String?
     @State private var selectedBrowserProject: Project?
     @State private var selectedFocusBoardProject: Project?
@@ -60,7 +61,7 @@ struct ContentView: View {
                                 }
                             }
                     } else {
-                        FocusBoardView(viewModel: focusBoardVM) { project in
+                        FocusBoardView(viewModel: focusBoardVM, reviewManager: reviewManager) { project in
                             selectedFocusBoardProject = project
                         }
                     }
@@ -285,6 +286,17 @@ struct ContentView: View {
             )
             retroManager.syncManager = syncMgr
             self.retrospectiveManager = retroManager
+
+            let reviewMgr = ProjectReviewManager(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                checkInRepo: checkInRepo,
+                llmClient: LLMClient(),
+                contextAssembler: ContextAssembler(knowledgeBase: kbManager)
+            )
+            self.reviewManager = reviewMgr
 
             let browserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,

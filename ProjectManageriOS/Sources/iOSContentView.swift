@@ -20,6 +20,7 @@ struct iOSContentView: View {
     @State private var knowledgeBaseManager: KnowledgeBaseManager?
     @State private var syncManager: SyncManager?
     @State private var httpServer: HTTPServer?
+    @State private var reviewManager: ProjectReviewManager?
     @State private var notificationManager: NotificationManager?
     @State private var crossProjectRoadmapVM: CrossProjectRoadmapViewModel?
     @State private var initError: String?
@@ -46,7 +47,7 @@ struct iOSContentView: View {
         Group {
             if let projectBrowserVM, let focusBoardVM, let chatVM, let quickCaptureVM {
                 IOSTabNavigationView(selectedTab: $selectedTab) {
-                    FocusBoardView(viewModel: focusBoardVM) { project in
+                    FocusBoardView(viewModel: focusBoardVM, reviewManager: reviewManager) { project in
                         // Navigation handled by navigationDestination in IOSTabNavigationView's NavigationStack
                     }
                     .navigationDestination(for: Project.self) { project in
@@ -269,6 +270,17 @@ struct iOSContentView: View {
             )
             retroManager.syncManager = syncMgr
             self.retrospectiveManager = retroManager
+
+            let reviewMgr = ProjectReviewManager(
+                projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo,
+                checkInRepo: checkInRepo,
+                llmClient: LLMClient(),
+                contextAssembler: ContextAssembler(knowledgeBase: kbManager)
+            )
+            self.reviewManager = reviewMgr
 
             let browserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,

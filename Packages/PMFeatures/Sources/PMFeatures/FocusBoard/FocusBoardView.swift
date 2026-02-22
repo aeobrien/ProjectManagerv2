@@ -7,10 +7,13 @@ import PMServices
 public struct FocusBoardView: View {
     @Bindable var viewModel: FocusBoardViewModel
     var onSelectProject: ((Project) -> Void)?
+    var reviewManager: ProjectReviewManager?
+    @State private var showReview = false
 
-    public init(viewModel: FocusBoardViewModel, onSelectProject: ((Project) -> Void)? = nil) {
+    public init(viewModel: FocusBoardViewModel, onSelectProject: ((Project) -> Void)? = nil, reviewManager: ProjectReviewManager? = nil) {
         self.viewModel = viewModel
         self.onSelectProject = onSelectProject
+        self.reviewManager = reviewManager
     }
 
     public var body: some View {
@@ -32,6 +35,33 @@ public struct FocusBoardView: View {
             }
         }
         .navigationTitle("Focus Board")
+        .toolbar {
+            if reviewManager != nil {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showReview = true
+                    } label: {
+                        Label("Portfolio Review", systemImage: "sparkles")
+                    }
+                    .help("Start an AI-powered review of your focused projects")
+                }
+            }
+        }
+        .sheet(isPresented: $showReview) {
+            if let reviewManager {
+                NavigationStack {
+                    ProjectReviewView(manager: reviewManager)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { showReview = false }
+                            }
+                        }
+                }
+                #if os(macOS)
+                .frame(minWidth: 600, minHeight: 500)
+                #endif
+            }
+        }
         .task { await viewModel.load() }
     }
 

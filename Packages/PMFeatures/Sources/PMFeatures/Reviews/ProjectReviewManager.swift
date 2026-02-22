@@ -195,6 +195,24 @@ public final class ProjectReviewManager {
                 prompt += "\n"
             }
 
+            if !context.queuedProjects.isEmpty {
+                prompt += "\nQueued projects:\n"
+                for p in context.queuedProjects {
+                    prompt += "- \(p.name)"
+                    if let reason = p.pauseReason, !reason.isEmpty { prompt += " (reason: \(reason))" }
+                    prompt += "\n"
+                }
+            }
+
+            if !context.pausedProjects.isEmpty {
+                prompt += "\nPaused projects:\n"
+                for p in context.pausedProjects {
+                    prompt += "- \(p.name)"
+                    if let reason = p.pauseReason, !reason.isEmpty { prompt += " (reason: \(reason))" }
+                    prompt += "\n"
+                }
+            }
+
             if !patterns.isEmpty {
                 prompt += "\nDetected patterns:\n"
                 for pattern in patterns {
