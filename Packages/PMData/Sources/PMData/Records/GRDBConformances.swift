@@ -79,3 +79,63 @@ extension Conversation: @retroactive FetchableRecord, @retroactive PersistableRe
 extension ChatMessage: @retroactive FetchableRecord, @retroactive PersistableRecord {
     public static let databaseTableName = "chatMessage"
 }
+
+// MARK: - Session Conformances
+
+extension Session: @retroactive FetchableRecord, @retroactive PersistableRecord {
+    public static let databaseTableName = "session"
+
+    public func encode(to container: inout PersistenceContainer) {
+        container["id"] = id
+        container["projectId"] = projectId
+        container["mode"] = mode.rawValue
+        container["subMode"] = subMode?.rawValue
+        container["status"] = status.rawValue
+        container["createdAt"] = createdAt
+        container["lastActiveAt"] = lastActiveAt
+        container["completedAt"] = completedAt
+        container["summaryId"] = summaryId
+    }
+
+    public init(row: Row) throws {
+        let modeString: String = row["mode"]
+        let subModeString: String? = row["subMode"]
+        let statusString: String = row["status"]
+        self.init(
+            id: row["id"],
+            projectId: row["projectId"],
+            mode: SessionMode(rawValue: modeString) ?? .exploration,
+            subMode: subModeString.flatMap { SessionSubMode(rawValue: $0) },
+            status: SessionStatus(rawValue: statusString) ?? .active,
+            createdAt: row["createdAt"],
+            lastActiveAt: row["lastActiveAt"],
+            completedAt: row["completedAt"],
+            summaryId: row["summaryId"]
+        )
+    }
+}
+
+extension SessionMessage: @retroactive FetchableRecord, @retroactive PersistableRecord {
+    public static let databaseTableName = "sessionMessage"
+
+    public func encode(to container: inout PersistenceContainer) {
+        container["id"] = id
+        container["sessionId"] = sessionId
+        container["role"] = role.rawValue
+        container["content"] = content
+        container["timestamp"] = timestamp
+        container["rawVoiceTranscript"] = rawVoiceTranscript
+    }
+
+    public init(row: Row) throws {
+        let roleString: String = row["role"]
+        self.init(
+            id: row["id"],
+            sessionId: row["sessionId"],
+            role: ChatRole(rawValue: roleString) ?? .user,
+            content: row["content"],
+            timestamp: row["timestamp"],
+            rawVoiceTranscript: row["rawVoiceTranscript"]
+        )
+    }
+}

@@ -15,6 +15,10 @@
 - [ ] The document creation menu offers Vision Statement, Technical Brief, and Other
 - [ ] Deleting a document removes it from the list and clears the selection
 - [ ] Filtering by document type shows only documents of that type
+- [ ] **(Phase 28.4)** A segmented picker in the document header offers: All, Vision, Brief, Other
+- [ ] **(Phase 28.4)** Selecting "Vision" shows only Vision Statement documents
+- [ ] **(Phase 28.4)** Selecting "Brief" shows only Technical Brief documents
+- [ ] **(Phase 28.4)** Selecting "All" restores the full document list
 
 ### Editing
 - [ ] Selecting a document from the list displays its title and content in the editor

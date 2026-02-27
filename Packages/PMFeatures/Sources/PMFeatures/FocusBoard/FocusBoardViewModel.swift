@@ -18,6 +18,7 @@ public final class FocusBoardViewModel {
     public private(set) var milestoneNameByTaskId: [UUID: String] = [:]
     public private(set) var healthByProject: [UUID: ProjectHealthSignals] = [:]
     public private(set) var diversityViolations: [DiversityViolation] = []
+    public private(set) var subtasksByTaskId: [UUID: [Subtask]] = [:]
     public private(set) var isLoading = false
     public private(set) var error: String?
 
@@ -46,6 +47,7 @@ public final class FocusBoardViewModel {
     private let taskRepo: TaskRepositoryProtocol
     private let milestoneRepo: MilestoneRepositoryProtocol
     private let phaseRepo: PhaseRepositoryProtocol
+    private let subtaskRepo: SubtaskRepositoryProtocol
     private let checkInRepo: CheckInRepositoryProtocol
 
     /// Optional check-in flow manager for computing urgency and navigating to check-ins.
@@ -65,6 +67,7 @@ public final class FocusBoardViewModel {
         taskRepo: TaskRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
         phaseRepo: PhaseRepositoryProtocol,
+        subtaskRepo: SubtaskRepositoryProtocol,
         checkInRepo: CheckInRepositoryProtocol,
         checkInFlowManager: CheckInFlowManager? = nil
     ) {
@@ -73,6 +76,7 @@ public final class FocusBoardViewModel {
         self.taskRepo = taskRepo
         self.milestoneRepo = milestoneRepo
         self.phaseRepo = phaseRepo
+        self.subtaskRepo = subtaskRepo
         self.checkInRepo = checkInRepo
         self.checkInFlowManager = checkInFlowManager
     }
@@ -91,6 +95,7 @@ public final class FocusBoardViewModel {
             var msNames: [UUID: String] = [:]
             var uMap: [UUID: CheckInUrgency] = [:]
             var ciMap: [UUID: CheckInRecord] = [:]
+            var stMap: [UUID: [Subtask]] = [:]
 
             for project in focusedProjects {
                 // Gather all tasks across all milestones in all phases
@@ -106,6 +111,14 @@ public final class FocusBoardViewModel {
                         allTasks.append(contentsOf: tasks)
                     }
                 }
+                // Load subtasks per task
+                for task in allTasks {
+                    let subtasks = try await subtaskRepo.fetchAll(forTask: task.id)
+                    if !subtasks.isEmpty {
+                        stMap[task.id] = subtasks
+                    }
+                }
+
                 tMap[project.id] = allTasks
 
                 // Health signals
@@ -127,6 +140,7 @@ public final class FocusBoardViewModel {
 
             tasksByProject = tMap
             milestoneNameByTaskId = msNames
+            subtasksByTaskId = stMap
             healthByProject = hMap
             urgencyByProject = uMap
             lastCheckInByProject = ciMap
@@ -192,11 +206,16 @@ public final class FocusBoardViewModel {
         return FocusManager.curateVisibleTasks(tasks: tasks, maxVisible: maxVisibleTasks)
     }
 
-    /// Returns tasks in the In Progress column.
+    /// Returns tasks in the In Progress column, respecting effort type filter.
     public func inProgressTasks(for projectId: UUID) -> [PMTask] {
         let all = tasksByProject[projectId] ?? []
-        return all.filter { $0.kanbanColumn == .inProgress }
-            .sorted { $0.sortOrder < $1.sortOrder }
+        var tasks = all.filter { $0.kanbanColumn == .inProgress }
+
+        if let filter = effortTypeFilter {
+            tasks = tasks.filter { $0.effortType == filter }
+        }
+
+        return tasks.sorted { $0.sortOrder < $1.sortOrder }
     }
 
     /// Returns tasks in the Done column, respecting retention settings.
@@ -294,14 +313,16 @@ public final class FocusBoardViewModel {
 
     /// Move a task identified by UUID to the given kanban column (used by drag-and-drop).
     public func moveTaskById(_ taskId: UUID, to column: KanbanColumn) async {
-        // Find the task across all projects
+        // Search raw task list (not filtered) to ensure we find the task
         for project in focusedProjects {
-            let allTasks = toDoTasks(for: project.id) + inProgressTasks(for: project.id) + doneTasks(for: project.id)
+            let allTasks = tasksByProject[project.id] ?? []
             if let task = allTasks.first(where: { $0.id == taskId }) {
+                Log.focus.info("moveTaskById: found task '\(task.name)' in project '\(project.name)', moving to \(column.displayName)")
                 await moveTask(task, to: column)
                 return
             }
         }
+        Log.focus.error("moveTaskById: task \(taskId) not found in any project")
     }
 
     // MARK: - Task Status Actions
@@ -341,11 +362,11 @@ public final class FocusBoardViewModel {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Unblock a task, returning it to in-progress.
+    /// Unblock a task, returning it to the To Do column.
     public func unblockTask(_ task: PMTask) async {
         var updated = task
-        updated.status = .inProgress
-        updated.kanbanColumn = ItemStatus.inProgress.kanbanColumn
+        updated.status = .notStarted
+        updated.kanbanColumn = .toDo
         updated.blockedType = nil
         updated.blockedReason = nil
         updated.waitingReason = nil
@@ -353,6 +374,30 @@ public final class FocusBoardViewModel {
         do {
             try await taskRepo.save(updated)
             syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
+            await load()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - Task Editing
+
+    /// Update a task's properties (name, deadline, priority, effort, etc).
+    public func updateTask(_ task: PMTask) async {
+        do {
+            try await taskRepo.save(task)
+            syncManager?.trackChange(entityType: .task, entityId: task.id, changeType: .update)
+            await load()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - Subtask Actions
+
+    /// Toggle a subtask's completion state.
+    public func toggleSubtask(_ subtask: Subtask) async {
+        var updated = subtask
+        updated.isCompleted.toggle()
+        do {
+            try await subtaskRepo.save(updated)
+            syncManager?.trackChange(entityType: .task, entityId: subtask.taskId, changeType: .update)
             await load()
         } catch { self.error = error.localizedDescription }
     }

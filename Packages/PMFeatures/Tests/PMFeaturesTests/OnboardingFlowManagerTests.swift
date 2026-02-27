@@ -4,6 +4,29 @@ import Foundation
 @testable import PMDomain
 @testable import PMServices
 
+// MARK: - Mock LLM Client with Message Tracking
+
+/// Extended mock that tracks sent messages and supports sequential responses.
+final class TrackingMockLLMClient: LLMClientProtocol, @unchecked Sendable {
+    var responses: [String] = []
+    var sentMessages: [[LLMMessage]] = []
+    var shouldThrow = false
+    private var callIndex = 0
+
+    var responseText: String {
+        get { responses.first ?? "Mock response" }
+        set { responses = [newValue] }
+    }
+
+    func send(messages: [LLMMessage], config: LLMRequestConfig) async throws -> LLMResponse {
+        sentMessages.append(messages)
+        if shouldThrow { throw LLMError.networkError("Mock error") }
+        let response = callIndex < responses.count ? responses[callIndex] : (responses.last ?? "Mock response")
+        callIndex += 1
+        return LLMResponse(content: response, inputTokens: 100, outputTokens: 50)
+    }
+}
+
 // MARK: - Mock Document Repository
 
 final class MockDocumentRepository: DocumentRepositoryProtocol, @unchecked Sendable {
@@ -234,7 +257,8 @@ struct OnboardingFlowManagerTests {
     @MainActor
     func sourceProjectTranscript() async {
         let client = MockLLMClient()
-        client.responseText = "Got it!"
+        let msId = UUID()
+        client.responseText = "Got it! [ACTION: CREATE_MILESTONE] phaseId: \(msId) name: MVP [/ACTION]"
         let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
 
         var source = Project(name: "Idea", categoryId: obCatId, lifecycleState: .idea)
@@ -474,5 +498,220 @@ struct OnboardingFlowManagerTests {
         #expect(task != nil)
         #expect(task?.priority == .high)
         #expect(task?.effortType == .deepFocus)
+    }
+
+    // MARK: - Multi-Turn Discovery Tests
+
+    @Test("Discovery without actions enters conversation mode")
+    @MainActor
+    func discoveryNoActions_entersConversation() async {
+        let client = MockLLMClient()
+        client.responseText = "Interesting idea! Tell me more about the scope boundaries and who the target user is."
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "I want to build a habit tracker"
+
+        await manager.startDiscovery()
+
+        #expect(manager.step == .aiConversation)
+        #expect(manager.exchangeCount == 1)
+        #expect(manager.conversationHistory.count == 2) // user + assistant
+    }
+
+    @Test("Discovery with actions goes to proposal")
+    @MainActor
+    func discoveryWithActions_goesToProposal() async {
+        let client = MockLLMClient()
+        let msId = UUID()
+        client.responseText = "Got it! [ACTION: CREATE_MILESTONE] phaseId: \(msId) name: MVP [/ACTION]"
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Build a simple note-taking app"
+
+        await manager.startDiscovery()
+
+        #expect(manager.step == .structureProposal)
+        #expect(manager.proposedItems.count == 1)
+    }
+
+    @Test("Continue discovery accumulates history")
+    @MainActor
+    func continueDiscovery_accumulatesHistory() async {
+        let client = MockLLMClient()
+        // First response: no actions (enter conversation)
+        client.responseText = "Tell me more about the target user."
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Build a habit tracker"
+
+        await manager.startDiscovery()
+        #expect(manager.step == .aiConversation)
+        #expect(manager.conversationHistory.count == 2)
+
+        // Continue: still no actions
+        client.responseText = "What does done look like for you?"
+        await manager.continueDiscovery(userResponse: "The target user is me, someone with ADHD")
+
+        #expect(manager.conversationHistory.count == 4) // 2 more: user + assistant
+        #expect(manager.exchangeCount == 2)
+        #expect(manager.step == .aiConversation)
+    }
+
+    @Test("Continue discovery at max exchanges forces proposal")
+    @MainActor
+    func continueDiscovery_maxExchanges_forcesProposal() async {
+        let client = MockLLMClient()
+        client.responseText = "Follow-up question."
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.maxExchanges = 2
+        manager.brainDumpText = "Build an app"
+
+        await manager.startDiscovery()
+        #expect(manager.step == .aiConversation)
+        #expect(manager.exchangeCount == 1)
+
+        // Second exchange hits max
+        client.responseText = "Final thoughts, no actions though."
+        await manager.continueDiscovery(userResponse: "More details here")
+
+        #expect(manager.exchangeCount == 2)
+        #expect(manager.step == .structureProposal)
+    }
+
+    @Test("Skip to structure works from conversation")
+    @MainActor
+    func skipToStructure_worksFromConversation() async {
+        let client = MockLLMClient()
+        client.responseText = "Tell me more."
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Build something"
+
+        await manager.startDiscovery()
+        #expect(manager.step == .aiConversation)
+
+        manager.skipToStructure()
+
+        #expect(manager.step == .structureProposal)
+    }
+
+    @Test("Generate documents includes conversation transcript")
+    @MainActor
+    func generateDocuments_includesTranscript() async {
+        let tracking = TrackingMockLLMClient()
+        // First call: no actions (enter conversation)
+        tracking.responses = [
+            "What's the scope?",
+            "Got it, here's the plan.",
+            "Generated vision statement with full context."
+        ]
+
+        let projectRepo = MockProjectRepository()
+        let phaseRepo = MockPhaseRepository()
+        let milestoneRepo = MockMilestoneRepository()
+        let taskRepo = MockTaskRepository()
+        let documentRepo = MockDocumentRepository()
+
+        let manager = OnboardingFlowManager(
+            llmClient: tracking,
+            projectRepo: projectRepo,
+            phaseRepo: phaseRepo,
+            milestoneRepo: milestoneRepo,
+            taskRepo: taskRepo,
+            documentRepo: documentRepo
+        )
+        manager.brainDumpText = "Build a habit tracker app"
+
+        await manager.startDiscovery()
+        #expect(manager.step == .aiConversation)
+
+        // Continue and skip
+        await manager.continueDiscovery(userResponse: "It's for people with ADHD")
+        manager.skipToStructure()
+
+        // Generate documents — should include conversation transcript
+        await manager.generateDocuments()
+
+        // The last sent message set should contain the conversation transcript
+        let lastMessages = tracking.sentMessages.last ?? []
+        let userPrompt = lastMessages.first { $0.role == .user }?.content ?? ""
+        #expect(userPrompt.contains("Discovery conversation"))
+        #expect(userPrompt.contains("Build a habit tracker app"))
+        #expect(userPrompt.contains("people with ADHD"))
+    }
+
+    @Test("Repo URL included in first message")
+    @MainActor
+    func repoURL_includedInFirstMessage() async {
+        let tracking = TrackingMockLLMClient()
+        tracking.responses = ["Tell me more."]
+
+        let projectRepo = MockProjectRepository()
+        let phaseRepo = MockPhaseRepository()
+        let milestoneRepo = MockMilestoneRepository()
+        let taskRepo = MockTaskRepository()
+        let documentRepo = MockDocumentRepository()
+
+        let manager = OnboardingFlowManager(
+            llmClient: tracking,
+            projectRepo: projectRepo,
+            phaseRepo: phaseRepo,
+            milestoneRepo: milestoneRepo,
+            taskRepo: taskRepo,
+            documentRepo: documentRepo
+        )
+        manager.brainDumpText = "Build an app"
+        manager.repoURL = "https://github.com/user/repo"
+
+        await manager.startDiscovery()
+
+        // Verify the user message in history includes the repo URL
+        let userMsg = manager.conversationHistory.first { $0.role == .user }
+        #expect(userMsg?.content.contains("https://github.com/user/repo") == true)
+    }
+
+    @Test("Repo URL saved on created project")
+    @MainActor
+    func repoURL_savedOnProject() async {
+        let client = MockLLMClient()
+        client.responseText = "Simple project."
+        let (manager, _, projectRepo, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Build app"
+        manager.repoURL = "https://github.com/user/repo"
+
+        await manager.startDiscovery()
+        await manager.createProject(name: "RepoTest", categoryId: obCatId, definitionOfDone: nil)
+
+        let project = projectRepo.projects.first
+        #expect(project?.repositoryURL == "https://github.com/user/repo")
+    }
+
+    @Test("Reset clears conversation state")
+    @MainActor
+    func resetClearsConversationState() async {
+        let client = MockLLMClient()
+        client.responseText = "Tell me more."
+        let (manager, _, _, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Test"
+        manager.repoURL = "https://github.com/test"
+        await manager.startDiscovery()
+
+        manager.reset()
+
+        #expect(manager.conversationHistory.isEmpty)
+        #expect(manager.exchangeCount == 0)
+        #expect(manager.repoURL == "")
+    }
+
+    @Test("Empty repo URL not saved on project")
+    @MainActor
+    func emptyRepoURL_notSaved() async {
+        let client = MockLLMClient()
+        client.responseText = "Simple."
+        let (manager, _, projectRepo, _, _, _, _) = makeOnboardingManager(llmClient: client)
+        manager.brainDumpText = "Build app"
+        manager.repoURL = "  "
+
+        await manager.startDiscovery()
+        await manager.createProject(name: "NoRepo", categoryId: obCatId, definitionOfDone: nil)
+
+        let project = projectRepo.projects.first
+        #expect(project?.repositoryURL == nil)
     }
 }

@@ -20,6 +20,7 @@ public struct ProjectContext: Sendable {
     public let phases: [Phase]
     public let milestones: [Milestone]
     public let tasks: [PMTask]
+    public let subtasksByTaskId: [UUID: [Subtask]]
     public let recentCheckIns: [CheckInRecord]
     public let frequentlyDeferredTasks: [PMTask]
     public let estimateAccuracy: Float?
@@ -31,6 +32,7 @@ public struct ProjectContext: Sendable {
         phases: [Phase] = [],
         milestones: [Milestone] = [],
         tasks: [PMTask] = [],
+        subtasksByTaskId: [UUID: [Subtask]] = [:],
         recentCheckIns: [CheckInRecord] = [],
         frequentlyDeferredTasks: [PMTask] = [],
         estimateAccuracy: Float? = nil,
@@ -41,6 +43,7 @@ public struct ProjectContext: Sendable {
         self.phases = phases
         self.milestones = milestones
         self.tasks = tasks
+        self.subtasksByTaskId = subtasksByTaskId
         self.recentCheckIns = recentCheckIns
         self.frequentlyDeferredTasks = frequentlyDeferredTasks
         self.estimateAccuracy = estimateAccuracy
@@ -71,15 +74,39 @@ public struct ContextAssembler: Sendable {
     }
 
     /// Assemble a context payload for a conversation.
+    ///
+    /// - Parameters:
+    ///   - conversationType: The type of conversation.
+    ///   - projectContext: Optional project context to include.
+    ///   - conversationHistory: Prior messages in the conversation.
+    ///   - exchangeNumber: Current exchange number for multi-turn flows (1-based).
+    ///   - maxExchanges: Maximum number of exchanges for multi-turn flows.
     public func assemble(
         conversationType: ConversationType,
         projectContext: ProjectContext?,
-        conversationHistory: [LLMMessage] = []
+        conversationHistory: [LLMMessage] = [],
+        exchangeNumber: Int? = nil,
+        maxExchanges: Int? = nil
     ) async throws -> ContextPayload {
-        let systemPrompt = PromptTemplates.systemPrompt(
-            for: conversationType,
-            projectName: projectContext?.project.name
-        )
+        let systemPrompt: String
+        switch conversationType {
+        case .onboarding where exchangeNumber != nil:
+            systemPrompt = PromptTemplates.onboarding(
+                exchangeNumber: exchangeNumber ?? 1,
+                maxExchanges: maxExchanges ?? 3
+            )
+        case .visionDiscovery where exchangeNumber != nil:
+            systemPrompt = PromptTemplates.visionDiscovery(
+                projectName: projectContext?.project.name ?? "Unknown",
+                exchangeNumber: exchangeNumber ?? 1,
+                maxExchanges: maxExchanges ?? 3
+            )
+        default:
+            systemPrompt = PromptTemplates.systemPrompt(
+                for: conversationType,
+                projectName: projectContext?.project.name
+            )
+        }
 
         var contextSections: [String] = []
 
@@ -156,68 +183,92 @@ public struct ContextAssembler: Sendable {
     // MARK: - Formatting
 
     private func formatProjectContext(_ ctx: ProjectContext) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .short
         var sections: [String] = []
 
         // Project overview
-        sections.append("""
-        PROJECT: \(ctx.project.name)
+        var overview = """
+        PROJECT: \(ctx.project.name) (id: \(ctx.project.id.uuidString))
         State: \(ctx.project.lifecycleState.rawValue)
         Definition of Done: \(ctx.project.definitionOfDone ?? "Not defined")
-        """)
+        """
+        if let transcript = ctx.project.quickCaptureTranscript, !transcript.isEmpty {
+            overview += "\nOriginal Capture: \(transcript)"
+        }
+        if let notes = ctx.project.notes, !notes.isEmpty {
+            overview += "\nNotes: \(notes)"
+        }
+        sections.append(overview)
 
-        // Phases
+        // Build task lookup by milestone
+        let tasksByMilestone = Dictionary(grouping: ctx.tasks, by: \.milestoneId)
+
+        // Full project hierarchy: Phase > Milestone > Task > Subtask
         if !ctx.phases.isEmpty {
-            let phaseList = ctx.phases.map { "- \($0.name) (\($0.status.rawValue))" }.joined(separator: "\n")
-            sections.append("PHASES:\n\(phaseList)")
+            var hierarchyLines: [String] = []
+            let milestonesForPhase = Dictionary(grouping: ctx.milestones, by: \.phaseId)
+
+            for phase in ctx.phases {
+                hierarchyLines.append("PHASE: \(phase.name) (\(phase.status.rawValue)) [id: \(phase.id.uuidString)]")
+                let phaseMilestones = milestonesForPhase[phase.id] ?? []
+                if phaseMilestones.isEmpty {
+                    hierarchyLines.append("  (no milestones)")
+                }
+                for ms in phaseMilestones {
+                    var msLine = "  MILESTONE: \(ms.name) (\(ms.status.rawValue)) [id: \(ms.id.uuidString)]"
+                    if let deadline = ms.deadline {
+                        msLine += " due: \(dateFormatter.string(from: deadline))"
+                    }
+                    hierarchyLines.append(msLine)
+
+                    let msTasks = tasksByMilestone[ms.id] ?? []
+                    if msTasks.isEmpty {
+                        hierarchyLines.append("    (no tasks)")
+                    }
+                    for task in msTasks {
+                        var taskLine = "    TASK: \(task.name) (\(task.status.rawValue)) [id: \(task.id.uuidString)]"
+                        if task.priority == .high { taskLine += " [HIGH PRIORITY]" }
+                        if let effort = task.effortType { taskLine += " [\(effort.rawValue)]" }
+                        if let deadline = task.deadline {
+                            taskLine += " due: \(dateFormatter.string(from: deadline))"
+                        }
+                        if let blocked = task.blockedType {
+                            taskLine += " [BLOCKED: \(blocked.rawValue) - \(task.blockedReason ?? "")]"
+                        }
+                        if task.status == .waiting, let reason = task.waitingReason {
+                            taskLine += " [WAITING: \(reason)]"
+                        }
+                        if task.timesDeferred > 0 {
+                            taskLine += " [deferred \(task.timesDeferred)x]"
+                        }
+                        hierarchyLines.append(taskLine)
+
+                        // Subtasks
+                        if let subtasks = ctx.subtasksByTaskId[task.id] {
+                            for subtask in subtasks {
+                                let check = subtask.isCompleted ? "x" : " "
+                                hierarchyLines.append("      [\(check)] \(subtask.name) [id: \(subtask.id.uuidString)]")
+                            }
+                        }
+                    }
+                }
+            }
+            sections.append("PROJECT STRUCTURE:\n" + hierarchyLines.joined(separator: "\n"))
         }
 
-        // Active milestones (limit to keep context manageable)
-        let activeMilestones = ctx.milestones.filter { $0.status != .completed }.prefix(10)
-        if !activeMilestones.isEmpty {
-            let msList = activeMilestones.map { ms in
-                var line = "- \(ms.name) (\(ms.status.rawValue))"
-                if let deadline = ms.deadline {
-                    let formatter = DateFormatter()
-                    formatter.dateStyle = .short
-                    line += " due: \(formatter.string(from: deadline))"
-                }
-                return line
-            }.joined(separator: "\n")
-            sections.append("ACTIVE MILESTONES:\n\(msList)")
-        }
-
-        // In-progress and blocked tasks (limit)
-        let relevantTasks = ctx.tasks.filter {
-            $0.status == .inProgress || $0.blockedType != nil
-        }.prefix(15)
-        if !relevantTasks.isEmpty {
-            let taskList = relevantTasks.map { task in
-                var line = "- \(task.name) (\(task.status.rawValue))"
-                if let blocked = task.blockedType {
-                    line += " [BLOCKED: \(blocked.rawValue) - \(task.blockedReason ?? "")]"
-                }
-                if task.timesDeferred > 0 {
-                    line += " [deferred \(task.timesDeferred)x]"
-                }
-                return line
-            }.joined(separator: "\n")
-            sections.append("CURRENT TASKS:\n\(taskList)")
-        }
-
-        // Frequently deferred tasks
+        // Frequently deferred tasks (highlight separately for pattern awareness)
         if !ctx.frequentlyDeferredTasks.isEmpty {
             let deferredList = ctx.frequentlyDeferredTasks.map {
-                "- \($0.name) (deferred \($0.timesDeferred)x)"
+                "- \($0.name) (deferred \($0.timesDeferred)x) [id: \($0.id.uuidString)]"
             }.joined(separator: "\n")
             sections.append("FREQUENTLY DEFERRED:\n\(deferredList)")
         }
 
         // Recent check-ins
         if !ctx.recentCheckIns.isEmpty {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .short
             let checkInList = ctx.recentCheckIns.prefix(3).map {
-                "- \(formatter.string(from: $0.timestamp)) (\($0.depth.rawValue)): \($0.aiSummary.isEmpty ? "No summary" : $0.aiSummary)"
+                "- \(dateFormatter.string(from: $0.timestamp)) (\($0.depth.rawValue)): \($0.aiSummary.isEmpty ? "No summary" : $0.aiSummary)"
             }.joined(separator: "\n")
             sections.append("RECENT CHECK-INS:\n\(checkInList)")
         }

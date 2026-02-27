@@ -158,7 +158,7 @@ public final class CheckInFlowManager {
             // Generate confirmation if actions present
             var confirmation: BundledConfirmation?
             if !parsed.actions.isEmpty {
-                confirmation = actionExecutor.generateConfirmation(from: parsed.actions)
+                confirmation = await actionExecutor.generateConfirmation(from: parsed.actions)
             }
 
             // Detect avoidance: tasks not addressed in the response

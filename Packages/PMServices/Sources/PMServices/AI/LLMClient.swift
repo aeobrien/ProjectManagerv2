@@ -33,15 +33,19 @@ public struct LLMRequestConfig: Sendable {
     public let provider: LLMProvider
 
     public init(
-        model: String = "claude-sonnet-4-20250514",
+        model: String? = nil,
         maxTokens: Int = 4096,
         temperature: Double = 0.7,
-        provider: LLMProvider = .anthropic
+        provider: LLMProvider? = nil
     ) {
-        self.model = model
+        let resolvedProvider = provider ?? {
+            let saved = UserDefaults.standard.string(forKey: "settings.aiProvider") ?? "anthropic"
+            return LLMProvider(rawValue: saved) ?? .anthropic
+        }()
+        self.provider = resolvedProvider
+        self.model = model ?? (resolvedProvider == .openai ? "gpt-4o" : "claude-sonnet-4-20250514")
         self.maxTokens = maxTokens
         self.temperature = temperature
-        self.provider = provider
     }
 }
 
@@ -59,13 +63,33 @@ public struct LLMResponse: Sendable {
 }
 
 /// Errors from LLM API calls.
-public enum LLMError: Error, Sendable, Equatable {
+public enum LLMError: Error, Sendable, Equatable, LocalizedError {
     case noAPIKey
     case invalidResponse
     case httpError(Int, String)
     case networkError(String)
     case rateLimited
+    case overloaded
     case tokenBudgetExceeded
+
+    public var errorDescription: String? {
+        switch self {
+        case .noAPIKey:
+            return "No API key configured. Add your key in Settings → AI Assistant."
+        case .invalidResponse:
+            return "Received an unexpected response from the AI service."
+        case .httpError(let code, _):
+            return "The AI service returned an error (HTTP \(code)). Try again in a moment."
+        case .networkError:
+            return "Unable to reach the AI service. Check your internet connection and try again."
+        case .rateLimited:
+            return "Too many requests — the AI service is rate-limiting. Wait a minute and try again."
+        case .overloaded:
+            return "The AI service is temporarily overloaded. Try again in a few minutes."
+        case .tokenBudgetExceeded:
+            return "The conversation is too long for the AI to process. Try clearing the chat and starting fresh."
+        }
+    }
 }
 
 /// Protocol for LLM API clients, enabling mocking.
@@ -78,18 +102,32 @@ public final class LLMClient: LLMClientProtocol, Sendable {
     private let session: URLSession
     private let keyProvider: APIKeyProvider
 
-    public init(session: URLSession = .shared, keyProvider: APIKeyProvider = EnvironmentKeyProvider()) {
+    public init(session: URLSession = .shared, keyProvider: APIKeyProvider = SettingsKeyProvider()) {
         self.session = session
         self.keyProvider = keyProvider
     }
 
     public func send(messages: [LLMMessage], config: LLMRequestConfig) async throws -> LLMResponse {
-        switch config.provider {
-        case .anthropic:
-            return try await sendAnthropic(messages: messages, config: config)
-        case .openai:
-            return try await sendOpenAI(messages: messages, config: config)
+        // Retry on overloaded/rate-limited errors with exponential backoff
+        var lastError: Error?
+        for attempt in 0...2 {
+            do {
+                switch config.provider {
+                case .anthropic:
+                    return try await sendAnthropic(messages: messages, config: config)
+                case .openai:
+                    return try await sendOpenAI(messages: messages, config: config)
+                }
+            } catch LLMError.overloaded, LLMError.rateLimited {
+                lastError = LLMError.overloaded
+                if attempt < 2 {
+                    let delay = UInt64(pow(2.0, Double(attempt + 1))) * 1_000_000_000
+                    try? await Task.sleep(nanoseconds: delay)
+                    Log.ai.info("AI service overloaded, retrying (attempt \(attempt + 1))")
+                }
+            }
         }
+        throw lastError ?? LLMError.overloaded
     }
 
     // MARK: - Anthropic
@@ -126,6 +164,7 @@ public final class LLMClient: LLMClientProtocol, Sendable {
         }
 
         if httpResponse.statusCode == 429 { throw LLMError.rateLimited }
+        if httpResponse.statusCode == 529 { throw LLMError.overloaded }
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -173,6 +212,7 @@ public final class LLMClient: LLMClientProtocol, Sendable {
         }
 
         if httpResponse.statusCode == 429 { throw LLMError.rateLimited }
+        if httpResponse.statusCode == 529 { throw LLMError.overloaded }
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -230,6 +270,24 @@ public struct EnvironmentKeyProvider: APIKeyProvider, Sendable {
         switch provider {
         case .anthropic: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
         case .openai: ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+        }
+    }
+}
+
+/// Reads API keys from UserDefaults (Settings), falling back to environment variables.
+public struct SettingsKeyProvider: APIKeyProvider, Sendable {
+    public init() {}
+
+    public func key(for provider: LLMProvider) -> String? {
+        let defaults = UserDefaults.standard
+        let settingsKey = defaults.string(forKey: "settings.aiApiKey") ?? ""
+        if !settingsKey.isEmpty {
+            return settingsKey
+        }
+        // Fall back to environment variables
+        switch provider {
+        case .anthropic: return ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+        case .openai: return ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
         }
     }
 }

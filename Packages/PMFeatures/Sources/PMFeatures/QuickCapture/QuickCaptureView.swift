@@ -6,12 +6,13 @@ import PMServices
 /// Lightweight quick capture sheet for creating Idea-state project stubs.
 public struct QuickCaptureView: View {
     @Bindable var viewModel: QuickCaptureViewModel
-    @State private var voiceManager = VoiceInputManager()
+    var voiceManager: VoiceInputManager
     @State private var showVoiceInput = false
     @Environment(\.dismiss) private var dismiss
 
-    public init(viewModel: QuickCaptureViewModel) {
+    public init(viewModel: QuickCaptureViewModel, voiceManager: VoiceInputManager) {
         self.viewModel = viewModel
+        self.voiceManager = voiceManager
     }
 
     public var body: some View {
@@ -115,13 +116,9 @@ public struct QuickCaptureView: View {
             // Actions
             HStack {
                 if viewModel.didSave {
-                    Button("Capture Another") {
-                        viewModel.reset()
-                        voiceManager.reset()
-                    }
-                    .buttonStyle(.bordered)
-
+                    Spacer()
                     Button("Done") {
+                        viewModel.reset()
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
@@ -149,10 +146,13 @@ public struct QuickCaptureView: View {
 // MARK: - Preview
 
 #Preview("Quick Capture") {
-    QuickCaptureView(viewModel: QuickCaptureViewModel(
-        projectRepo: PreviewProjectRepo(),
-        categoryRepo: PreviewCategoryRepo()
-    ))
+    QuickCaptureView(
+        viewModel: QuickCaptureViewModel(
+            projectRepo: PreviewProjectRepo(),
+            categoryRepo: PreviewCategoryRepo()
+        ),
+        voiceManager: VoiceInputManager()
+    )
 }
 
 // Simple preview mocks

@@ -8,25 +8,27 @@ struct CrossProjectRoadmapViewModelTests {
 
     @MainActor
     private func makeVM() -> (
-        CrossProjectRoadmapViewModel, MockProjectRepository, MockPhaseRepository, MockMilestoneRepository
+        CrossProjectRoadmapViewModel, MockProjectRepository, MockPhaseRepository, MockMilestoneRepository, MockTaskRepository
     ) {
         let projectRepo = MockProjectRepository()
         let phaseRepo = MockPhaseRepository()
         let milestoneRepo = MockMilestoneRepository()
+        let taskRepo = MockTaskRepository()
 
         let vm = CrossProjectRoadmapViewModel(
             projectRepo: projectRepo,
             phaseRepo: phaseRepo,
-            milestoneRepo: milestoneRepo
+            milestoneRepo: milestoneRepo,
+            taskRepo: taskRepo
         )
 
-        return (vm, projectRepo, phaseRepo, milestoneRepo)
+        return (vm, projectRepo, phaseRepo, milestoneRepo, taskRepo)
     }
 
     @Test("Initial state")
     @MainActor
     func initialState() {
-        let (vm, _, _, _) = makeVM()
+        let (vm, _, _, _, _) = makeVM()
         #expect(vm.milestones.isEmpty)
         #expect(vm.isLoading == false)
         #expect(vm.error == nil)
@@ -39,7 +41,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Load milestones from focused projects")
     @MainActor
     func loadMilestones() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var project = Project(name: "App", categoryId: UUID())
         project.focusSlotIndex = 0
@@ -64,7 +66,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Milestones sorted by deadline, unscheduled last")
     @MainActor
     func sortOrder() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var project = Project(name: "App", categoryId: UUID())
         project.focusSlotIndex = 0
@@ -93,7 +95,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Upcoming deadlines filters and sorts")
     @MainActor
     func upcomingDeadlines() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var project = Project(name: "App", categoryId: UUID())
         project.focusSlotIndex = 0
@@ -119,7 +121,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Overdue milestones detected")
     @MainActor
     func overdueDetection() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var project = Project(name: "App", categoryId: UUID())
         project.focusSlotIndex = 0
@@ -145,7 +147,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Multiple projects with color indices")
     @MainActor
     func multipleProjects() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var p1 = Project(name: "Alpha", categoryId: UUID())
         p1.focusSlotIndex = 0
@@ -179,7 +181,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Filter milestones by status")
     @MainActor
     func filterByStatus() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var project = Project(name: "App", categoryId: UUID())
         project.focusSlotIndex = 0
@@ -206,7 +208,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Empty focused projects")
     @MainActor
     func emptyProjects() async {
-        let (vm, _, _, _) = makeVM()
+        let (vm, _, _, _, _) = makeVM()
 
         await vm.load()
 
@@ -235,7 +237,7 @@ struct CrossProjectRoadmapViewModelTests {
     @Test("Milestones grouped by project")
     @MainActor
     func milestonesByProject() async {
-        let (vm, projectRepo, phaseRepo, milestoneRepo) = makeVM()
+        let (vm, projectRepo, phaseRepo, milestoneRepo, _) = makeVM()
 
         var p1 = Project(name: "Alpha", categoryId: UUID())
         p1.focusSlotIndex = 0
@@ -260,5 +262,77 @@ struct CrossProjectRoadmapViewModelTests {
         let grouped = vm.milestonesByProject
         #expect(grouped[p1.id]?.count == 2)
         #expect(grouped[p2.id]?.count == 1)
+    }
+
+    @Test("Computed status reflects task progress")
+    @MainActor
+    func computedStatusFromTasks() async {
+        let (vm, projectRepo, phaseRepo, milestoneRepo, taskRepo) = makeVM()
+
+        var project = Project(name: "App", categoryId: UUID())
+        project.focusSlotIndex = 0
+        project.lifecycleState = .focused
+        projectRepo.projects = [project]
+
+        let phase = Phase(projectId: project.id, name: "P1")
+        phaseRepo.phases = [phase]
+
+        let ms1 = Milestone(phaseId: phase.id, name: "All Done", status: .notStarted)
+        let ms2 = Milestone(phaseId: phase.id, name: "In Progress", status: .notStarted)
+        let ms3 = Milestone(phaseId: phase.id, name: "Not Started", status: .notStarted)
+        milestoneRepo.milestones = [ms1, ms2, ms3]
+
+        // ms1: all tasks completed
+        let t1 = PMTask(milestoneId: ms1.id, name: "Done1", status: .completed)
+        let t2 = PMTask(milestoneId: ms1.id, name: "Done2", status: .completed)
+        // ms2: some tasks completed
+        let t3 = PMTask(milestoneId: ms2.id, name: "Done3", status: .completed)
+        let t4 = PMTask(milestoneId: ms2.id, name: "Todo4", status: .notStarted)
+        // ms3: no tasks
+        taskRepo.tasks = [t1, t2, t3, t4]
+
+        await vm.load()
+
+        let allDone = vm.milestones.first { $0.milestoneName == "All Done" }
+        let inProg = vm.milestones.first { $0.milestoneName == "In Progress" }
+        let notStarted = vm.milestones.first { $0.milestoneName == "Not Started" }
+
+        #expect(allDone?.computedStatus == .completed)
+        #expect(allDone?.totalTasks == 2)
+        #expect(allDone?.completedTasks == 2)
+
+        #expect(inProg?.computedStatus == .inProgress)
+        #expect(inProg?.totalTasks == 2)
+        #expect(inProg?.completedTasks == 1)
+
+        #expect(notStarted?.computedStatus == .notStarted)
+        #expect(notStarted?.totalTasks == 0)
+    }
+
+    @Test("Overdue uses computed status")
+    @MainActor
+    func overdueUsesComputedStatus() async {
+        let (vm, projectRepo, phaseRepo, milestoneRepo, taskRepo) = makeVM()
+
+        var project = Project(name: "App", categoryId: UUID())
+        project.focusSlotIndex = 0
+        project.lifecycleState = .focused
+        projectRepo.projects = [project]
+
+        let phase = Phase(projectId: project.id, name: "P1")
+        phaseRepo.phases = [phase]
+
+        let pastDate = Date().addingTimeInterval(-86400 * 3)
+        // Milestone status is .notStarted, but all tasks are completed
+        let ms = Milestone(phaseId: phase.id, name: "Done MS", status: .notStarted, deadline: pastDate)
+        milestoneRepo.milestones = [ms]
+
+        let t1 = PMTask(milestoneId: ms.id, name: "Task1", status: .completed)
+        taskRepo.tasks = [t1]
+
+        await vm.load()
+
+        // Should NOT be overdue because computedStatus is .completed
+        #expect(vm.overdue.isEmpty)
     }
 }

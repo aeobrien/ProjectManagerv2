@@ -8,6 +8,8 @@ public struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
     @State private var voiceManager = VoiceInputManager()
     @State private var showVoiceInput = false
+    @State private var showCapabilities = false
+    @State private var showHistory = false
 
     public init(viewModel: ChatViewModel) {
         self.viewModel = viewModel
@@ -52,12 +54,35 @@ public struct ChatView: View {
                 Text("Quick Log").tag(ConversationType.checkInQuickLog)
                 Text("Full Check-in").tag(ConversationType.checkInFull)
                 Text("Review").tag(ConversationType.review)
-                Text("Onboarding").tag(ConversationType.onboarding)
             }
             .labelsHidden()
             .frame(maxWidth: 150)
 
             Spacer()
+
+            Button {
+                showHistory = true
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Conversation history")
+            .popover(isPresented: $showHistory) {
+                conversationHistoryPopover
+            }
+
+            Button {
+                showCapabilities = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("AI capabilities")
+            .popover(isPresented: $showCapabilities) {
+                aiCapabilitiesPopover
+            }
 
             Button {
                 viewModel.clearChat()
@@ -70,6 +95,154 @@ public struct ChatView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+
+    // MARK: - AI Capabilities Popover
+
+    private var aiCapabilitiesPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("AI Actions")
+                .font(.headline)
+
+            let trustDescription: String = {
+                switch viewModel.aiTrustLevel {
+                case "autoMinor": return "Minor actions are auto-applied. Major actions require your confirmation."
+                case "autoAll": return "All actions are auto-applied without confirmation."
+                default: return "All actions require your confirmation before being applied."
+                }
+            }()
+
+            Text(trustDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            let minorLabel: String = viewModel.aiTrustLevel == "autoMinor" ? "Auto-applied (minor)" : "Minor actions"
+            VStack(alignment: .leading, spacing: 6) {
+                Text(minorLabel)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+
+                ForEach(AIAction.capabilitiesList.filter { !$0.isMajor }, id: \.action) { cap in
+                    capabilityRow(cap.action, description: cap.description)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Major actions")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+
+                ForEach(AIAction.capabilitiesList.filter { $0.isMajor }, id: \.action) { cap in
+                    capabilityRow(cap.action, description: cap.description)
+                }
+            }
+        }
+        .padding()
+        .frame(width: 320)
+    }
+
+    private func capabilityRow(_ action: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(action)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Text(description)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Conversation History Popover
+
+    private var conversationHistoryPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Conversations")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    viewModel.clearChat()
+                    showHistory = false
+                } label: {
+                    Label("New", systemImage: "plus.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Divider()
+
+            if viewModel.savedConversations.isEmpty {
+                Text("No saved conversations")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        let sorted = viewModel.savedConversations.sorted { $0.updatedAt > $1.updatedAt }
+                        ForEach(sorted) { conversation in
+                            conversationRow(conversation)
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+            }
+        }
+        .padding()
+        .frame(width: 320)
+        .task { await viewModel.loadConversations() }
+    }
+
+    private func conversationRow(_ conversation: Conversation) -> some View {
+        Button {
+            viewModel.resumeConversation(conversation)
+            showHistory = false
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(conversation.conversationType.rawValue.capitalized)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.blue)
+                    Spacer()
+                    Text(conversation.updatedAt, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if let firstMessage = conversation.messages.first {
+                    Text(String(firstMessage.content.prefix(60)))
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                Text("\(conversation.messages.count) messages")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Delete", role: .destructive) {
+                Task { await viewModel.deleteConversation(id: conversation.id) }
+            }
+        }
     }
 
     // MARK: - Messages
@@ -186,7 +359,7 @@ public struct ChatView: View {
                 .buttonStyle(.plain)
             }
 
-            Text(briefing)
+            MarkdownText(briefing)
                 .font(.callout)
                 .foregroundStyle(.primary)
         }
@@ -254,12 +427,13 @@ struct MessageBubble: View {
             if message.role == .user { Spacer(minLength: 60) }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-                Text(message.content)
+                messageText
                     .font(.body)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(backgroundColor, in: RoundedRectangle(cornerRadius: 16))
                     .foregroundStyle(message.role == .user ? .white : .primary)
+                    .textSelection(.enabled)
 
                 Text(message.timestamp, style: .time)
                     .font(.caption2)
@@ -267,6 +441,16 @@ struct MessageBubble: View {
             }
 
             if message.role != .user { Spacer(minLength: 60) }
+        }
+    }
+
+    /// Render markdown for assistant messages; plain text for user messages.
+    @ViewBuilder
+    private var messageText: some View {
+        if message.role == .assistant {
+            MarkdownText(message.content)
+        } else {
+            Text(message.content)
         }
     }
 

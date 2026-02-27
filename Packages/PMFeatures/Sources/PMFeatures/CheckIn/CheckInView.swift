@@ -129,9 +129,8 @@ public struct CheckInView: View {
                 Text("AI Summary")
                     .font(.headline)
 
-                Text(response)
+                MarkdownText(response)
                     .font(.body)
-                    .textSelection(.enabled)
             }
         }
 

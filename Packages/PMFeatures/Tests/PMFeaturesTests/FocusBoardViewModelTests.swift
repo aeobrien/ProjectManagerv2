@@ -39,6 +39,7 @@ func makeFocusBoardVM() -> (
     let taskRepo = MockTaskRepository()
     let milestoneRepo = MockMilestoneRepository()
     let phaseRepo = MockPhaseRepository()
+    let subtaskRepo = MockSubtaskRepository()
     let checkInRepo = MockCheckInRepository()
     let vm = FocusBoardViewModel(
         projectRepo: projectRepo,
@@ -46,6 +47,7 @@ func makeFocusBoardVM() -> (
         taskRepo: taskRepo,
         milestoneRepo: milestoneRepo,
         phaseRepo: phaseRepo,
+        subtaskRepo: subtaskRepo,
         checkInRepo: checkInRepo
     )
     return (vm, projectRepo, categoryRepo, taskRepo, milestoneRepo, phaseRepo, checkInRepo)
@@ -448,9 +450,9 @@ struct FocusBoardViewModelTests {
         await vm.unblockTask(taskRepo.tasks[0])
 
         let updated = taskRepo.tasks[0]
-        #expect(updated.status == .inProgress)
+        #expect(updated.status == .notStarted)
         #expect(updated.blockedType == nil)
         #expect(updated.blockedReason == nil)
-        #expect(updated.kanbanColumn == .inProgress)
+        #expect(updated.kanbanColumn == .toDo)
     }
 }

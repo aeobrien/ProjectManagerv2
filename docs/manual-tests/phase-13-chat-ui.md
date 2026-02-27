@@ -7,6 +7,8 @@
 1. **ChatViewModelTests** (9 tests) — Validates initial state defaults, sending a text message and receiving an AI response, sending a voice message, action parsing from AI responses, bundled confirmation flow with checkbox selection, follow-up message handling, and clearing conversation history.
 
 ## Manual Verification Checklist
+
+### Core Chat
 - [ ] ChatView displays a project selector and conversation type selector at the top
 - [ ] Selecting a project and conversation type configures the chat context correctly
 - [ ] Typing a message in the input bar and sending it appends the user message to the message list
@@ -19,6 +21,18 @@
 - [ ] Follow-up messages maintain conversation context from prior exchanges
 - [ ] Clearing the conversation resets the message list and confirmation state
 - [ ] The message list scrolls to the latest message automatically
+
+### Conversation History (Phase 28.1)
+- [ ] A clock icon (clock.arrow.circlepath) button appears in the chat header between the conversation type picker and the info button
+- [ ] Clicking the clock button opens a "Conversations" popover
+- [ ] The popover shows a "New" button at the top to start a fresh conversation
+- [ ] Saved conversations are listed sorted by most recently updated first
+- [ ] Each row shows: conversation type label, first message preview (truncated ~60 chars), relative date, message count
+- [ ] Clicking a conversation row resumes it: popover closes, messages load, conversation type updates
+- [ ] Right-clicking a conversation row shows a "Delete" context menu option
+- [ ] Deleting a conversation removes it from the list; if it was active, the chat clears
+- [ ] Switching projects in the dropdown loads conversations for the new project
+- [ ] The history popover shows "No saved conversations" when the list is empty
 
 ## Files Created/Modified
 ### New Files

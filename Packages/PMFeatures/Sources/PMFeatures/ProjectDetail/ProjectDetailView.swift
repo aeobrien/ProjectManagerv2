@@ -9,6 +9,7 @@ public struct ProjectDetailView: View {
     var documentViewModel: DocumentViewModel?
     var analyticsViewModel: AnalyticsViewModel?
     var adversarialReviewManager: AdversarialReviewManager?
+    var sessionRepo: SessionRepositoryProtocol?
     @State private var selectedTab: DetailTab = .roadmap
     @State private var showRetrospective = false
 
@@ -17,13 +18,15 @@ public struct ProjectDetailView: View {
         roadmapViewModel: ProjectRoadmapViewModel? = nil,
         documentViewModel: DocumentViewModel? = nil,
         analyticsViewModel: AnalyticsViewModel? = nil,
-        adversarialReviewManager: AdversarialReviewManager? = nil
+        adversarialReviewManager: AdversarialReviewManager? = nil,
+        sessionRepo: SessionRepositoryProtocol? = nil
     ) {
         self.viewModel = viewModel
         self.roadmapViewModel = roadmapViewModel
         self.documentViewModel = documentViewModel
         self.analyticsViewModel = analyticsViewModel
         self.adversarialReviewManager = adversarialReviewManager
+        self.sessionRepo = sessionRepo
     }
 
     public var body: some View {
@@ -185,6 +188,12 @@ public struct ProjectDetailView: View {
                 } else {
                     PMEmptyState(icon: "sparkles", title: "Review", message: "Adversarial review not available.")
                 }
+            case .sessions:
+                if let sessionRepo {
+                    SessionHistoryView(projectId: viewModel.project.id, sessionRepo: sessionRepo)
+                } else {
+                    PMEmptyState(icon: "bubble.left.and.bubble.right", title: "Sessions", message: "Session history not available.")
+                }
             }
         }
     }
@@ -196,6 +205,7 @@ enum DetailTab: String, CaseIterable {
     case documents = "Documents"
     case analytics = "Analytics"
     case review = "Review"
+    case sessions = "Sessions"
     case overview = "Overview"
 }
 
@@ -207,11 +217,33 @@ struct OverviewTabView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if let repoURL = viewModel.project.repositoryURL, !repoURL.isEmpty {
+                    PMSectionHeader("Repository")
+                    if let url = URL(string: repoURL) {
+                        Link(repoURL, destination: url)
+                            .font(.body)
+                            .padding(.horizontal)
+                    } else {
+                        Text(repoURL)
+                            .font(.body)
+                            .padding(.horizontal)
+                    }
+                }
+
                 if let dod = viewModel.project.definitionOfDone, !dod.isEmpty {
                     PMSectionHeader("Definition of Done")
                     Text(dod)
                         .font(.body)
                         .padding(.horizontal)
+                }
+
+                if let transcript = viewModel.project.quickCaptureTranscript, !transcript.isEmpty {
+                    PMSectionHeader("Original Capture")
+                    Text(transcript)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
+                        .textSelection(.enabled)
                 }
 
                 if let notes = viewModel.project.notes, !notes.isEmpty {

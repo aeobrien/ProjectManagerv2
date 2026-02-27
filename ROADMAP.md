@@ -831,6 +831,7 @@ Protocols live in **Domain**. Concrete implementations live in **Data** or **Ser
 | 25 | AI Project Reviews | Features, Services | Phase 14 |
 | 26 | Cross-Project Roadmap | Features | Phase 8 |
 | 27 | Adversarial Review Pipeline | Features, Services | Phases 15, 16 |
+| 28 | Polish & Gaps (testing) | Features, Services | Various |
 
 ---
 
@@ -845,3 +846,68 @@ Several phases can be developed in parallel once their dependencies are met:
 - **After Phase 13**: Phases 14, 15, and 17 can run in parallel
 
 In practice, a single developer will work sequentially through the main path (0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 9 → 10 → 11 → 12 → 13 → 14 → 15), deferring parallel-eligible phases to when they're most useful.
+
+---
+
+## Phase 28: Polish & Gaps (identified during manual testing)
+
+Items discovered during the full manual test procedure that need implementing. Split into priority groups.
+
+### Pre-Testing Priority
+
+These directly affect test sections and should be addressed before testing those sections.
+
+#### 28.1 Conversation History UI
+**Affects:** Test Part 11 (Conversation Persistence)
+**Status:** Not started
+**What:** The `ChatViewModel` has `savedConversations`, `loadConversations()`, and `resumeConversation()` but no view exposes them. Users cannot browse or resume previous conversations.
+**Where:** `PMFeatures/Chat/ChatView.swift`
+**Scope:** Add a conversation list panel to ChatView. Show saved conversations grouped by project, allow resuming, allow deleting old conversations.
+
+#### 28.2 Vision & Technical Brief Templates
+**Affects:** Test Part 12 (Onboarding), Test Part 15 (Adversarial Review)
+**Status:** Not started
+**What:** Onboarding generates vision statements and technical briefs via very basic prompts with no structure guidance. The AI produces inconsistent output.
+**Where:** `PMFeatures/Onboarding/OnboardingFlowManager.swift`, `PMServices/AI/PromptTemplates.swift`
+**Scope:** Create structured prompt templates defining expected sections for:
+- Vision statement: Purpose, Target User, Core Problem, Key Principles, Definition of Done, Success Criteria, etc.
+- Technical brief: Architecture, Data Model, Key Technologies, Constraints, Phase Breakdown, etc.
+Include exemplar structure from the actual ProjectManager vision/brief documents.
+
+#### 28.3 Adaptive Onboarding First Message
+**Affects:** Test Part 12 (Onboarding)
+**Status:** Not started
+**What:** When onboarding an existing Idea-state project (from Quick Capture), the AI should reflect back its understanding before asking questions. Currently jumps straight to questions.
+**Where:** `PMFeatures/Onboarding/OnboardingFlowManager.swift`
+**Scope:** Modify the AI discovery prompt to first summarise understanding of the project from the brain dump, then ask targeted clarifying questions.
+
+#### 28.4 Document Type Filtering
+**Affects:** Test Part 16 area (Documents)
+**Status:** Not started
+**What:** DocumentEditorView has no filter-by-type UI. No way to narrow the document list by type.
+**Where:** `PMFeatures/Documents/DocumentEditorView.swift`
+**Scope:** Add a segmented picker or dropdown to filter documents by type (vision, brief, notes, other, all).
+
+### Post-Testing
+
+These are enhancements that don't block testing.
+
+#### 28.5 Codebase/Repo Linking on Projects
+**What:** Allow linking a local filesystem path and/or GitHub URL to any project.
+**Where:** `PMDomain/Entities/Project.swift`, `PMFeatures/ProjectDetail/`
+**Scope:** Add `localPath: String?` and `repoURL: String?` to Project. Show in project detail. AI context could include file listings.
+
+#### 28.6 Knowledge Base Indexing of External Files/Code
+**What:** Index external files from a linked codebase into the knowledge base for richer RAG conversations.
+**Where:** `PMServices/KnowledgeBase/`
+**Scope:** File walker → chunker → embedder pipeline. Incremental re-indexing.
+
+#### 28.7 Migration System from Previous App Version
+**What:** Per-project onboard/abandon flow with AI assistance to restructure legacy data into the new hierarchy.
+**Where:** New feature module
+**Scope:** Import mechanism, AI-assisted restructuring, project-by-project migration.
+
+#### 28.8 Retrospective "View Notes" Action
+**What:** Roadmap view has a "View Retrospective Notes" context menu item on completed phases but the action is empty.
+**Where:** `PMFeatures/ProjectDetail/RoadmapView.swift`
+**Scope:** Wire the context menu action to open a sheet displaying the phase's `retrospectiveNotes`.

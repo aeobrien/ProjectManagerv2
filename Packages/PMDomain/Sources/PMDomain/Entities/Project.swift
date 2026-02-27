@@ -15,6 +15,7 @@ public struct Project: Identifiable, Equatable, Hashable, Codable, Sendable {
     public var definitionOfDone: String?
     public var notes: String?
     public var quickCaptureTranscript: String?
+    public var repositoryURL: String?
 
     public init(
         id: UUID = UUID(),
@@ -29,7 +30,8 @@ public struct Project: Identifiable, Equatable, Hashable, Codable, Sendable {
         lastWorkedOn: Date? = nil,
         definitionOfDone: String? = nil,
         notes: String? = nil,
-        quickCaptureTranscript: String? = nil
+        quickCaptureTranscript: String? = nil,
+        repositoryURL: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -44,5 +46,6 @@ public struct Project: Identifiable, Equatable, Hashable, Codable, Sendable {
         self.definitionOfDone = definitionOfDone
         self.notes = notes
         self.quickCaptureTranscript = quickCaptureTranscript
+        self.repositoryURL = repositoryURL
     }
 }

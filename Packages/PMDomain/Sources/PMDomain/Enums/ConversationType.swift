@@ -12,4 +12,5 @@ public enum ConversationType: String, Codable, Sendable, CaseIterable {
     case retrospective
     case reEntry
     case general
+    case visionDiscovery
 }

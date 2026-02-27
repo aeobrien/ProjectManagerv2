@@ -2,61 +2,33 @@ import Foundation
 import PMDomain
 
 /// Prompt templates for each conversation type with behavioural contract.
+/// Templates are loaded from PromptTemplateStore, which supports user overrides via UserDefaults.
 public enum PromptTemplates {
+    private static var store: PromptTemplateStore { .shared }
 
     // MARK: - Behavioural Contract
 
     /// Core behavioural contract embedded in all system prompts.
-    public static let behaviouralContract = """
-    BEHAVIOURAL CONTRACT:
-    - You are a supportive project management assistant for a user with ADHD and executive dysfunction.
-    - Be encouraging but honest. Celebrate progress, no matter how small.
-    - Never shame or guilt-trip about unfinished work, missed deadlines, or avoidance.
-    - Suggest concrete, actionable next steps rather than vague advice.
-    - Keep responses concise — long walls of text are overwhelming.
-    - When proposing changes, use structured ACTION blocks (documented below).
-    - Respect the user's autonomy — suggest, don't dictate.
-    - Recognise patterns (frequent deferral, scope creep, stalled milestones) and gently surface them.
-    - Use timeboxing language: "try working on this for 25 minutes" rather than "finish this today".
-    - Default to optimism but adjust estimates with the pessimism multiplier.
-    """
+    public static var behaviouralContract: String {
+        store.template(for: .behaviouralContract)
+    }
 
     // MARK: - Action Block Documentation
 
     /// Documentation for structured action blocks, included in system prompts.
-    public static let actionBlockDocs = """
-    STRUCTURED ACTIONS:
-    When you want to propose changes to the user's project data, include ACTION blocks in your response.
-    Each action block starts with [ACTION: TYPE] and ends with [/ACTION].
-    Multiple actions can be proposed in a single response.
-
-    Available actions:
-    - [ACTION: COMPLETE_TASK] taskId: <uuid> [/ACTION]
-    - [ACTION: UPDATE_NOTES] projectId: <uuid> notes: <text> [/ACTION]
-    - [ACTION: FLAG_BLOCKED] taskId: <uuid> blockedType: <poorlyDefined|tooLarge|missingInfo|missingResource|decisionRequired> reason: <text> [/ACTION]
-    - [ACTION: SET_WAITING] taskId: <uuid> reason: <text> checkBackDate: <yyyy-MM-dd> [/ACTION]
-    - [ACTION: CREATE_SUBTASK] taskId: <uuid> name: <text> [/ACTION]
-    - [ACTION: UPDATE_DOCUMENT] documentId: <uuid> content: <text> [/ACTION]
-    - [ACTION: INCREMENT_DEFERRED] taskId: <uuid> [/ACTION]
-    - [ACTION: SUGGEST_SCOPE_REDUCTION] projectId: <uuid> suggestion: <text> [/ACTION]
-    - [ACTION: CREATE_MILESTONE] phaseId: <uuid> name: <text> [/ACTION]
-    - [ACTION: CREATE_TASK] milestoneId: <uuid> name: <text> priority: <low|normal|high> effortType: <quickWin|deepFocus|admin|creative|physical> [/ACTION]
-    - [ACTION: CREATE_DOCUMENT] projectId: <uuid> title: <text> content: <text> [/ACTION]
-
-    Always wrap proposed changes in ACTION blocks. Natural language explanation goes outside the blocks.
-    """
+    public static var actionBlockDocs: String {
+        store.template(for: .actionBlockDocs)
+    }
 
     // MARK: - System Prompts
 
     /// System prompt for quick log check-ins.
     public static func checkInQuickLog(projectName: String) -> String {
-        """
+        let body = store.render(.checkInQuickLog, variables: ["projectName": projectName])
+        return """
         \(behaviouralContract)
 
-        CONTEXT: Quick Log check-in for project "\(projectName)".
-        The user wants to give a brief update. Ask minimal questions.
-        After hearing their update, propose bundled changes using ACTION blocks.
-        Keep your response under 150 words (excluding action blocks).
+        \(body)
 
         \(actionBlockDocs)
         """
@@ -64,57 +36,89 @@ public enum PromptTemplates {
 
     /// System prompt for full conversation check-ins.
     public static func checkInFull(projectName: String) -> String {
-        """
+        let body = store.render(.checkInFull, variables: ["projectName": projectName])
+        return """
         \(behaviouralContract)
 
-        CONTEXT: Full check-in conversation for project "\(projectName)".
-        Take time to understand how the user is feeling about this project.
-        Ask about:
-        1. What progress has been made since last check-in
-        2. Any blockers or things they're avoiding
-        3. Whether current milestones still feel right
-        4. If any tasks feel too big and need breaking down
-
-        Surface patterns you notice (frequently deferred tasks, stalled milestones).
-        Reference timeboxes where appropriate.
-        After the conversation, propose bundled changes.
+        \(body)
 
         \(actionBlockDocs)
         """
     }
 
-    /// System prompt for project onboarding.
+    /// System prompt for project onboarding (default, used by systemPrompt(for:)).
     public static func onboarding() -> String {
-        """
+        onboarding(exchangeNumber: 1, maxExchanges: 3)
+    }
+
+    /// Exchange-aware system prompt for project onboarding.
+    public static func onboarding(exchangeNumber: Int, maxExchanges: Int) -> String {
+        let isFinal = exchangeNumber >= maxExchanges
+        let vars = [
+            "exchangeNumber": "\(exchangeNumber)",
+            "maxExchanges": "\(maxExchanges)"
+        ]
+
+        let body: String
+        if isFinal {
+            let mainBody = store.render(.onboarding, variables: vars)
+            let finalInstructions = store.render(.onboardingFinalExchange, variables: vars)
+            // Replace the non-final instruction with the final one
+            let mainLines = mainBody.components(separatedBy: "\n")
+            let trimmed = mainLines.filter { !$0.contains("You may ask follow-up questions") }.joined(separator: "\n")
+            body = trimmed + "\n\n" + finalInstructions
+        } else {
+            body = store.render(.onboarding, variables: vars)
+        }
+
+        return """
         \(behaviouralContract)
 
-        CONTEXT: New project onboarding.
-        Help the user flesh out a new project idea. Ask about:
-        1. What's the core goal?
-        2. What does "done" look like?
-        3. What are the major phases or milestones?
-        4. What's the first concrete step?
-
-        Keep it lightweight — don't overwhelm with questions.
-        Propose creating phases, milestones, and initial tasks via ACTION blocks.
+        \(body)
 
         \(actionBlockDocs)
+        """
+    }
+
+    /// System prompt for vision discovery on an imported project (default).
+    public static func visionDiscovery(projectName: String) -> String {
+        visionDiscovery(projectName: projectName, exchangeNumber: 1, maxExchanges: 3)
+    }
+
+    /// Exchange-aware system prompt for vision discovery on an imported project.
+    public static func visionDiscovery(projectName: String, exchangeNumber: Int, maxExchanges: Int) -> String {
+        let isFinal = exchangeNumber >= maxExchanges
+        let vars = [
+            "projectName": projectName,
+            "exchangeNumber": "\(exchangeNumber)",
+            "maxExchanges": "\(maxExchanges)"
+        ]
+
+        let body: String
+        if isFinal {
+            let mainBody = store.render(.visionDiscovery, variables: vars)
+            let finalInstructions = store.render(.visionDiscoveryFinalExchange, variables: vars)
+            let mainLines = mainBody.components(separatedBy: "\n")
+            let trimmed = mainLines.filter { !$0.contains("If you have enough information") }.joined(separator: "\n")
+            body = trimmed + "\n\n" + finalInstructions
+        } else {
+            body = store.render(.visionDiscovery, variables: vars)
+        }
+
+        return """
+        \(behaviouralContract)
+
+        \(body)
         """
     }
 
     /// System prompt for project review.
     public static func review(projectName: String) -> String {
-        """
+        let body = store.render(.review, variables: ["projectName": projectName])
+        return """
         \(behaviouralContract)
 
-        CONTEXT: Review of project "\(projectName)".
-        Help the user evaluate the project's current state:
-        1. Overall progress vs. expectations
-        2. Blocked or stalled areas
-        3. Scope creep detection
-        4. Whether the definition of done still makes sense
-
-        Be analytical but kind. Suggest concrete improvements.
+        \(body)
 
         \(actionBlockDocs)
         """
@@ -122,19 +126,11 @@ public enum PromptTemplates {
 
     /// System prompt for retrospective.
     public static func retrospective(projectName: String) -> String {
-        """
+        let body = store.render(.retrospective, variables: ["projectName": projectName])
+        return """
         \(behaviouralContract)
 
-        CONTEXT: Retrospective for project "\(projectName)".
-        This project is being completed, paused, or abandoned.
-        Help the user reflect on:
-        1. What went well
-        2. What was challenging
-        3. What patterns to carry forward
-        4. Any unresolved feelings about the project
-
-        For abandoned/paused projects, normalise the decision.
-        Help the user frame it as learning, not failure.
+        \(body)
 
         \(actionBlockDocs)
         """
@@ -142,18 +138,11 @@ public enum PromptTemplates {
 
     /// System prompt for re-entry briefing.
     public static func reEntry(projectName: String) -> String {
-        """
+        let body = store.render(.reEntry, variables: ["projectName": projectName])
+        return """
         \(behaviouralContract)
 
-        CONTEXT: Re-entry briefing for project "\(projectName)".
-        The user is returning to this project after a break.
-        Provide a warm, concise summary:
-        1. Where things were left off
-        2. What the next milestones are
-        3. Any blocked or waiting tasks
-        4. Suggested first step to re-engage
-
-        Keep it encouraging — returning to a dormant project is hard.
+        \(body)
 
         \(actionBlockDocs)
         """
@@ -161,14 +150,69 @@ public enum PromptTemplates {
 
     /// System prompt for general conversation.
     public static func general() -> String {
-        """
+        let body = store.template(for: .general)
+        return """
         \(behaviouralContract)
 
-        CONTEXT: General conversation about project management.
-        Help the user with whatever they need — planning, brainstorming,
-        prioritisation, or just thinking out loud.
+        \(body)
 
         \(actionBlockDocs)
+        """
+    }
+
+    // MARK: - Document Templates
+
+    /// Structured template for vision statement generation.
+    public static var visionStatementTemplate: String {
+        store.template(for: .visionStatementTemplate)
+    }
+
+    /// Structured template for technical brief generation.
+    public static var technicalBriefTemplate: String {
+        store.template(for: .technicalBriefTemplate)
+    }
+
+    // MARK: - Migration Import
+
+    /// Prompt for extracting structured project data from an Obsidian markdown file.
+    public static func markdownImport() -> String {
+        """
+        You are a project data extraction assistant. Given a markdown file describing a project, \
+        extract structured data from it. Return your response in the exact format below.
+
+        EXTRACTION RULES:
+        - Extract the project name from the first # heading.
+        - Map any Tags section to the closest built-in category: Software, Music, Hardware/Electronics, Creative, Life Admin, Research/Learning. \
+          Default to Software if unclear.
+        - Extract phases from "Implementation Roadmap" or "Phases" or "Milestones" sections. \
+          Each ## or ### heading in that section becomes a phase.
+        - Extract tasks from "Next Steps" or checkbox items (- [ ] or - [x]). \
+          Preserve completion status. If a completed item has a date annotation, extract it.
+        - Group tasks under the most relevant phase. If no clear mapping, use a "General" milestone.
+        - Find a Definition of Done from "Success Metrics" or "Definition of Done" or "Goals" sections.
+        - Extract GitHub/repository URLs from "Repositories", "Links", or inline URLs matching github.com.
+        - Extract any "Open Questions" or "Unknowns" section as notes.
+
+        RESPONSE FORMAT:
+        [METADATA]
+        category: <closest built-in category name>
+        repositoryURL: <URL or empty>
+        definitionOfDone: <text or empty>
+        notes: <text or empty>
+        [/METADATA]
+
+        Then for each phase, milestone, and task use ACTION blocks:
+
+        [ACTION: CREATE_PHASE] projectId: PLACEHOLDER name: <phase name> [/ACTION]
+        [ACTION: CREATE_MILESTONE] phaseId: PHASE_<phase name> name: <milestone name> [/ACTION]
+        [ACTION: CREATE_TASK] milestoneId: MILESTONE_<milestone name> name: <task name> priority: normal effortType: quickWin [/ACTION]
+
+        For completed tasks, add a COMPLETE marker after the CREATE_TASK:
+        [COMPLETED_TASK: <task name>]
+
+        Keep phase and milestone names concise. Every task must belong to a milestone, \
+        and every milestone must belong to a phase. If the markdown has no clear phase structure, \
+        create a single phase called "Main" with a "General" milestone.
         """
     }
 
@@ -181,6 +225,7 @@ public enum PromptTemplates {
         case .review: review(projectName: projectName ?? "Unknown")
         case .retrospective: retrospective(projectName: projectName ?? "Unknown")
         case .reEntry: reEntry(projectName: projectName ?? "Unknown")
+        case .visionDiscovery: visionDiscovery(projectName: projectName ?? "Unknown")
         case .brainDump, .planning, .general: general()
         }
     }

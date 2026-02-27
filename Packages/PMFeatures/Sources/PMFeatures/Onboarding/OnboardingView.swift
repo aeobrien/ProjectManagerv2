@@ -5,15 +5,17 @@ import PMDesignSystem
 /// Guided onboarding flow for creating a new project from a brain dump.
 public struct OnboardingView: View {
     @Bindable var manager: OnboardingFlowManager
-    @State private var projectName = ""
+    @State private var projectName: String
     @State private var selectedCategoryId: UUID?
     @State private var definitionOfDone = ""
+    @State private var conversationInput = ""
     let categories: [PMDomain.Category]
     @Environment(\.dismiss) private var dismiss
 
     public init(manager: OnboardingFlowManager, categories: [PMDomain.Category]) {
         self.manager = manager
         self.categories = categories
+        self._projectName = State(initialValue: manager.suggestedProjectName)
     }
 
     public var body: some View {
@@ -53,6 +55,8 @@ public struct OnboardingView: View {
                     Text(label)
                         .font(.caption2)
                         .foregroundStyle(index <= currentStepIndex ? .primary : .secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
                 if index < stepLabels.count - 1 {
                     Rectangle()
@@ -67,13 +71,14 @@ public struct OnboardingView: View {
     }
 
     private var stepLabels: [String] {
-        ["Brain Dump", "AI Discovery", "Structure", "Create", "Done"]
+        let firstStep = manager.isFromImport ? "Imported" : "Brain Dump"
+        return [firstStep, "AI Discovery", "Structure", "Create", "Done"]
     }
 
     private var currentStepIndex: Int {
         switch manager.step {
         case .brainDump: 0
-        case .aiDiscovery: 1
+        case .aiDiscovery, .aiConversation: 1
         case .structureProposal: 2
         case .creatingProject: 3
         case .completed: 4
@@ -89,6 +94,8 @@ public struct OnboardingView: View {
             brainDumpStep
         case .aiDiscovery:
             aiDiscoveryStep
+        case .aiConversation:
+            aiConversationStep
         case .structureProposal:
             structureProposalStep
         case .creatingProject:
@@ -102,10 +109,12 @@ public struct OnboardingView: View {
 
     private var brainDumpStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Describe your project idea")
+            Text(manager.isFromImport ? "Imported project content" : "Describe your project idea")
                 .font(.headline)
 
-            Text("Write freely about what you want to build. The AI will help organize your thoughts into a structured project.")
+            Text(manager.isFromImport
+                ? "Review the imported markdown below. You can edit it or add more context before the AI analyzes it."
+                : "Write freely about what you want to build. The AI will help organize your thoughts into a structured project.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -115,6 +124,9 @@ public struct OnboardingView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(.quaternary, lineWidth: 1)
                 )
+
+            TextField("Repository URL (optional)", text: $manager.repoURL)
+                .textFieldStyle(.roundedBorder)
 
             Button {
                 Task { await manager.startDiscovery() }
@@ -140,9 +152,8 @@ public struct OnboardingView: View {
             if manager.isLoading {
                 ProgressView("Analyzing your project idea...")
             } else {
-                Text(manager.aiResponse)
+                MarkdownText(manager.aiResponse)
                     .font(.body)
-                    .textSelection(.enabled)
 
                 HStack {
                     Text("Suggested complexity:")
@@ -150,6 +161,90 @@ public struct OnboardingView: View {
                     Text(manager.proposedComplexity.rawValue.capitalized)
                         .font(.subheadline.weight(.semibold))
                 }
+            }
+        }
+    }
+
+    // MARK: - AI Conversation (Multi-Turn)
+
+    private var aiConversationStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Discovery Conversation")
+                    .font(.headline)
+                Spacer()
+                Text("Exchange \(manager.exchangeCount) of \(manager.maxExchanges)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.quaternary, in: Capsule())
+            }
+
+            // Conversation history
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(manager.conversationHistory.enumerated()), id: \.offset) { _, message in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: message.role == .user ? "person.circle.fill" : "sparkles")
+                                .foregroundStyle(message.role == .user ? .blue : .purple)
+                                .frame(width: 20)
+
+                            if message.role == .assistant {
+                                MarkdownText(message.content)
+                                    .font(.body)
+                            } else {
+                                Text(message.content)
+                                    .font(.body)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 300)
+
+            Divider()
+
+            // Reply input
+            HStack(alignment: .bottom, spacing: 8) {
+                TextEditor(text: $conversationInput)
+                    .frame(minHeight: 60, maxHeight: 120)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(.quaternary, lineWidth: 1)
+                    )
+
+                VStack(spacing: 8) {
+                    Button {
+                        let input = conversationInput
+                        conversationInput = ""
+                        Task { await manager.continueDiscovery(userResponse: input) }
+                    } label: {
+                        if manager.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Reply", systemImage: "arrow.up.circle.fill")
+                        }
+                    }
+                    .disabled(conversationInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || manager.isLoading)
+
+                    Button {
+                        manager.skipToStructure()
+                    } label: {
+                        Text("Skip")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(manager.isLoading)
+                }
+            }
+
+            if let error = manager.error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
     }

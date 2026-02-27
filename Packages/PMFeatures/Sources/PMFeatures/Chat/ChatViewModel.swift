@@ -38,7 +38,11 @@ public final class ChatViewModel {
     public var selectedProjectId: UUID? {
         didSet {
             if selectedProjectId != oldValue {
-                Task { await checkReturnBriefing() }
+                clearChat()
+                Task {
+                    await loadConversations()
+                    await checkReturnBriefing()
+                }
             }
         }
     }
@@ -59,6 +63,7 @@ public final class ChatViewModel {
     private let phaseRepo: PhaseRepositoryProtocol
     private let milestoneRepo: MilestoneRepositoryProtocol
     private let taskRepo: TaskRepositoryProtocol
+    private let subtaskRepo: SubtaskRepositoryProtocol
     private let checkInRepo: CheckInRepositoryProtocol
     private let conversationRepo: ConversationRepositoryProtocol?
 
@@ -81,6 +86,7 @@ public final class ChatViewModel {
         phaseRepo: PhaseRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
         taskRepo: TaskRepositoryProtocol,
+        subtaskRepo: SubtaskRepositoryProtocol,
         checkInRepo: CheckInRepositoryProtocol,
         conversationRepo: ConversationRepositoryProtocol? = nil,
         contextAssembler: ContextAssembler = ContextAssembler()
@@ -93,6 +99,7 @@ public final class ChatViewModel {
         self.phaseRepo = phaseRepo
         self.milestoneRepo = milestoneRepo
         self.taskRepo = taskRepo
+        self.subtaskRepo = subtaskRepo
         self.checkInRepo = checkInRepo
         self.conversationRepo = conversationRepo
     }
@@ -151,7 +158,7 @@ public final class ChatViewModel {
             if !parsed.actions.isEmpty {
                 if aiTrustLevel == "autoAll" {
                     // Auto-apply all actions
-                    let confirmation = actionExecutor.generateConfirmation(from: parsed.actions)
+                    let confirmation = await actionExecutor.generateConfirmation(from: parsed.actions)
                     try await actionExecutor.execute(confirmation)
                     Log.ai.info("Auto-applied \(confirmation.acceptedCount) actions (trust: autoAll)")
                 } else if aiTrustLevel == "autoMinor" {
@@ -160,17 +167,17 @@ public final class ChatViewModel {
                     let majorActions = parsed.actions.filter { $0.isMajor }
 
                     if !minorActions.isEmpty {
-                        let minorConfirmation = actionExecutor.generateConfirmation(from: minorActions)
+                        let minorConfirmation = await actionExecutor.generateConfirmation(from: minorActions)
                         try await actionExecutor.execute(minorConfirmation)
                         Log.ai.info("Auto-applied \(minorConfirmation.acceptedCount) minor actions")
                     }
 
                     if !majorActions.isEmpty {
-                        pendingConfirmation = actionExecutor.generateConfirmation(from: majorActions)
+                        pendingConfirmation = await actionExecutor.generateConfirmation(from: majorActions)
                     }
                 } else {
                     // confirmAll — show all actions for confirmation
-                    pendingConfirmation = actionExecutor.generateConfirmation(from: parsed.actions)
+                    pendingConfirmation = await actionExecutor.generateConfirmation(from: parsed.actions)
                 }
             }
 
@@ -230,7 +237,11 @@ public final class ChatViewModel {
             if let checkIn = lastCheckIn {
                 daysSinceCheckIn = Calendar.current.dateComponents([.day], from: checkIn.timestamp, to: Date()).day ?? 0
             } else {
-                // No check-ins ever — treat as dormant
+                // No check-ins — only treat as dormant if project isn't brand new
+                let daysSinceCreation = Calendar.current.dateComponents([.day], from: project.createdAt, to: Date()).day ?? 0
+                if daysSinceCreation < returnBriefingThresholdDays {
+                    return  // New project, not dormant
+                }
                 daysSinceCheckIn = returnBriefingThresholdDays + 1
             }
 
@@ -248,7 +259,8 @@ public final class ChatViewModel {
 
             let config = LLMRequestConfig()
             let response = try await llmClient.send(messages: payload, config: config)
-            returnBriefing = response.content
+            let parsed = actionParser.parse(response.content)
+            returnBriefing = parsed.naturalLanguage
             conversationType = .reEntry
 
             Log.ai.info("Generated return briefing for '\(project.name)' (dormant \(daysSinceCheckIn) days)")
@@ -322,6 +334,21 @@ public final class ChatViewModel {
         conversationType = conversation.conversationType
     }
 
+    /// Delete a saved conversation.
+    public func deleteConversation(id: UUID) async {
+        guard let conversationRepo else { return }
+        do {
+            try await conversationRepo.delete(id: id)
+            savedConversations.removeAll { $0.id == id }
+            if activeConversation?.id == id {
+                clearChat()
+            }
+            Log.ai.info("Deleted conversation \(id)")
+        } catch {
+            Log.ai.error("Failed to delete conversation: \(error)")
+        }
+    }
+
     /// Convert a display ChatMessage to a domain ChatMessage for persistence.
     private func toDomainMessage(_ message: ChatMessage) -> PMDomain.ChatMessage {
         let role: ChatRole = message.role == .user ? .user : .assistant
@@ -373,6 +400,7 @@ public final class ChatViewModel {
         let phases = try await phaseRepo.fetchAll(forProject: project.id)
         var allMilestones: [Milestone] = []
         var allTasks: [PMTask] = []
+        var subtaskMap: [UUID: [Subtask]] = [:]
 
         for phase in phases {
             let milestones = try await milestoneRepo.fetchAll(forPhase: phase.id)
@@ -380,6 +408,12 @@ public final class ChatViewModel {
             for ms in milestones {
                 let tasks = try await taskRepo.fetchAll(forMilestone: ms.id)
                 allTasks.append(contentsOf: tasks)
+                for task in tasks {
+                    let subtasks = try await subtaskRepo.fetchAll(forTask: task.id)
+                    if !subtasks.isEmpty {
+                        subtaskMap[task.id] = subtasks
+                    }
+                }
             }
         }
 
@@ -398,6 +432,7 @@ public final class ChatViewModel {
             phases: phases,
             milestones: allMilestones,
             tasks: allTasks,
+            subtasksByTaskId: subtaskMap,
             recentCheckIns: Array(recentCheckIns.prefix(5)),
             frequentlyDeferredTasks: frequentlyDeferred,
             estimateAccuracy: accuracy,

@@ -65,9 +65,8 @@ public struct RetrospectiveView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Return Briefing", systemImage: "doc.text")
                             .font(.subheadline.weight(.semibold))
-                        Text(briefing)
+                        MarkdownText(briefing)
                             .font(.body)
-                            .textSelection(.enabled)
                     }
                 }
             }
@@ -171,9 +170,14 @@ public struct RetrospectiveView: View {
                     Image(systemName: message.role == "user" ? "person.circle" : "sparkles")
                         .foregroundStyle(message.role == "user" ? .blue : .purple)
 
-                    Text(message.content)
-                        .font(.body)
-                        .textSelection(.enabled)
+                    if message.role == "user" {
+                        Text(message.content)
+                            .font(.body)
+                            .textSelection(.enabled)
+                    } else {
+                        MarkdownText(message.content)
+                            .font(.body)
+                    }
                 }
                 .padding(.vertical, 4)
             }
@@ -183,9 +187,8 @@ public struct RetrospectiveView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Summary", systemImage: "doc.text")
                             .font(.subheadline.weight(.semibold))
-                        Text(summary)
+                        MarkdownText(summary)
                             .font(.body)
-                            .textSelection(.enabled)
                     }
                 }
             }
@@ -226,7 +229,7 @@ public struct RetrospectiveView: View {
                 .font(.title2.weight(.semibold))
 
             if let summary = manager.aiSummary {
-                Text(summary)
+                MarkdownText(summary)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

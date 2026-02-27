@@ -22,6 +22,9 @@
 ### AI Discovery Step
 - [ ] AI response is displayed with natural language explanation
 - [ ] Suggested complexity (Simple/Medium/Complex) is shown
+- [ ] **(Phase 28.3)** AI's first response reflects understanding of the brain dump — does not repeat it verbatim
+- [ ] **(Phase 28.3)** AI acknowledges strengths/interesting aspects of the idea before asking questions
+- [ ] **(Phase 28.3)** AI asks 2-3 targeted follow-up questions about gaps, not generic "What's the core goal?" questions
 
 ### Structure Proposal Step
 - [ ] Proposed milestones and tasks are displayed as toggleable cards
@@ -30,6 +33,8 @@
 - [ ] Counter shows "X of Y items selected"
 - [ ] For medium/complex projects, a "Generate Documents" button appears
 - [ ] Clicking "Generate Documents" creates vision statement (and tech brief for complex)
+- [ ] **(Phase 28.2)** Generated Vision Statement has 7 structured sections: Overall Intention, Core Design Principles, High-Level System Shape, Target User & Context, Key Workflows, Definition of Done, What This Is NOT
+- [ ] **(Phase 28.2)** Generated Technical Brief (complex projects) has 7 structured sections: Overview, Key Architectural Decisions, Architecture, Data Model, Key Technologies, Constraints & Requirements, Phase Breakdown
 - [ ] Document status indicators show when documents are ready
 - [ ] Project name, category picker, and DoD fields are shown
 - [ ] "Create Project" button requires name and category

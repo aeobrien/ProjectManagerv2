@@ -196,6 +196,97 @@ public final class DatabaseManager: Sendable {
             }
         }
 
+        migrator.registerMigration("v3-repositoryURL") { db in
+            try db.alter(table: "project") { t in
+                t.add(column: "repositoryURL", .text)
+            }
+        }
+
+        migrator.registerMigration("v4-sessions") { db in
+            // Sessions
+            try db.create(table: "session") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("projectId", .text).notNull()
+                    .references("project", onDelete: .cascade)
+                t.column("mode", .text).notNull()
+                t.column("subMode", .text)
+                t.column("status", .text).notNull().defaults(to: "active")
+                t.column("createdAt", .datetime).notNull()
+                t.column("lastActiveAt", .datetime).notNull()
+                t.column("completedAt", .datetime)
+                t.column("summaryId", .text)
+            }
+            try db.create(index: "session_project_status",
+                          on: "session",
+                          columns: ["projectId", "status"])
+
+            // Session messages
+            try db.create(table: "sessionMessage") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("sessionId", .text).notNull()
+                    .references("session", onDelete: .cascade)
+                t.column("role", .text).notNull()
+                t.column("content", .text).notNull()
+                t.column("timestamp", .datetime).notNull()
+                t.column("rawVoiceTranscript", .text)
+            }
+
+            // Session summaries
+            try db.create(table: "sessionSummary") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("sessionId", .text).notNull()
+                    .references("session", onDelete: .cascade)
+                    .unique()
+                t.column("mode", .text).notNull()
+                t.column("subMode", .text)
+                t.column("completionStatus", .text).notNull()
+                t.column("deliverableType", .text)
+                t.column("contentEstablished", .text).notNull() // JSON
+                t.column("contentObserved", .text).notNull() // JSON
+                t.column("whatComesNext", .text).notNull() // JSON
+                t.column("modeSpecific", .text) // JSON, nullable
+                t.column("startedAt", .datetime).notNull()
+                t.column("endedAt", .datetime).notNull()
+                t.column("duration", .integer).notNull()
+                t.column("messageCount", .integer).notNull()
+                t.column("inputTokens", .integer)
+                t.column("outputTokens", .integer)
+            }
+        }
+
+        migrator.registerMigration("v5-processProfile-deliverable") { db in
+            // Process profiles (one per project)
+            try db.create(table: "processProfile") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("projectId", .text).notNull()
+                    .references("project", onDelete: .cascade)
+                    .unique()
+                t.column("planningDepth", .text).notNull().defaults(to: "fullRoadmap")
+                t.column("recommendedDeliverables", .text).notNull().defaults(to: "[]") // JSON
+                t.column("suggestedModePath", .text).notNull().defaults(to: "[]") // JSON
+                t.column("modificationHistory", .text).notNull().defaults(to: "[]") // JSON
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+
+            // Typed deliverables
+            try db.create(table: "deliverable") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("projectId", .text).notNull()
+                    .references("project", onDelete: .cascade)
+                t.column("type", .text).notNull()
+                t.column("status", .text).notNull().defaults(to: "pending")
+                t.column("title", .text).notNull().defaults(to: "")
+                t.column("content", .text).notNull().defaults(to: "")
+                t.column("versionHistory", .text).notNull().defaults(to: "[]") // JSON
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            try db.create(index: "deliverable_project_type",
+                          on: "deliverable",
+                          columns: ["projectId", "type"])
+        }
+
         try migrator.migrate(dbQueue)
     }
 

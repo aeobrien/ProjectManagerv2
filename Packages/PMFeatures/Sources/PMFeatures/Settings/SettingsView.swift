@@ -2,19 +2,39 @@ import SwiftUI
 import PMData
 import PMServices
 import PMDesignSystem
+import PMDomain
 
 /// Full settings panel backed by SettingsManager.
 public struct SettingsView: View {
     @Bindable var settings: SettingsManager
     var exportService: ExportService?
     var syncManager: SyncManager?
+    var migrationViewModelFactory: (() -> MigrationViewModel)?
+    var onboardingManager: OnboardingFlowManager?
+    var categories: [PMDomain.Category] = []
+    var aiDevScreenViewModelFactory: (() -> AIDevScreenViewModel)?
     @State private var exportStatus: ExportStatus?
     @State private var isExporting = false
+    @State private var showMigration = false
+    @State private var showOnboarding = false
+    @State private var showAIDevScreen = false
 
-    public init(settings: SettingsManager, exportService: ExportService? = nil, syncManager: SyncManager? = nil) {
+    public init(
+        settings: SettingsManager,
+        exportService: ExportService? = nil,
+        syncManager: SyncManager? = nil,
+        migrationViewModelFactory: (() -> MigrationViewModel)? = nil,
+        onboardingManager: OnboardingFlowManager? = nil,
+        categories: [PMDomain.Category] = [],
+        aiDevScreenViewModelFactory: (() -> AIDevScreenViewModel)? = nil
+    ) {
         self.settings = settings
         self.exportService = exportService
         self.syncManager = syncManager
+        self.migrationViewModelFactory = migrationViewModelFactory
+        self.onboardingManager = onboardingManager
+        self.categories = categories
+        self.aiDevScreenViewModelFactory = aiDevScreenViewModelFactory
     }
 
     public var body: some View {
@@ -27,14 +47,48 @@ public struct SettingsView: View {
                 doneColumnSection
                 voiceSection
                 aiSection
+                promptTemplatesSection
+                importSection
                 exportSection
                 syncSection
                 lifePlannerSyncSection
                 integrationSection
+                #if DEBUG
+                aiDevSection
+                #endif
             }
             .padding()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(isPresented: $showMigration) {
+            if let factory = migrationViewModelFactory {
+                MigrationView(viewModel: factory()) { markdown, repoURL, name in
+                    // Pre-fill onboarding and switch sheets
+                    if let mgr = onboardingManager {
+                        mgr.reset()
+                        mgr.brainDumpText = markdown
+                        mgr.repoURL = repoURL
+                        mgr.isFromImport = true
+                        mgr.suggestedProjectName = name
+                    }
+                    showMigration = false
+                    showOnboarding = true
+                }
+            }
+        }
+        .sheet(isPresented: $showAIDevScreen) {
+            if let factory = aiDevScreenViewModelFactory {
+                AIDevScreenView(viewModel: factory())
+            }
+        }
+        .sheet(isPresented: $showOnboarding) {
+            if let mgr = onboardingManager {
+                OnboardingView(manager: mgr, categories: categories)
+                    #if os(macOS)
+                    .frame(minWidth: 700, idealWidth: 800, minHeight: 600)
+                    #endif
+            }
+        }
     }
 
     // MARK: - Focus Board
@@ -189,6 +243,33 @@ public struct SettingsView: View {
                     Text("Auto-apply Minor").tag("autoMinor")
                     Text("Auto-apply All").tag("autoAll")
                 }
+            }
+        }
+    }
+
+    // MARK: - Prompt Templates
+
+    private var promptTemplatesSection: some View {
+        PromptTemplateEditorView()
+    }
+
+    // MARK: - Import
+
+    private var importSection: some View {
+        PMCard {
+            VStack(alignment: .leading, spacing: 12) {
+                PMSectionHeader("Import Projects", subtitle: "Import projects from markdown files")
+
+                Text("Each .md file will be fed into the onboarding flow, where the AI will help you structure it into a full project.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    showMigration = true
+                } label: {
+                    Label("Import from Markdown", systemImage: "square.and.arrow.down")
+                }
+                .disabled(migrationViewModelFactory == nil)
             }
         }
     }
@@ -409,6 +490,25 @@ public struct SettingsView: View {
             }
         }
     }
+
+    // MARK: - AI Dev Screen
+
+    #if DEBUG
+    private var aiDevSection: some View {
+        PMCard {
+            VStack(alignment: .leading, spacing: 12) {
+                PMSectionHeader("AI System V2 (Dev)", subtitle: "Development testing screen for the V2 AI pipeline")
+
+                Button {
+                    showAIDevScreen = true
+                } label: {
+                    Label("Open Dev Screen", systemImage: "terminal")
+                }
+                .disabled(aiDevScreenViewModelFactory == nil)
+            }
+        }
+    }
+    #endif
 
     // MARK: - Helpers
 

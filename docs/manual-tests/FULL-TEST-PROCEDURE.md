@@ -22,13 +22,15 @@
 
 ### Build Verification
 ```bash
-# All automated tests pass (514 total)
-cd Packages/PMDomain && swift test    # 85 tests
-cd Packages/PMData && swift test      # 72 tests
-cd Packages/PMServices && swift test  # 160 tests
-cd Packages/PMFeatures && swift test  # 197 tests
+# All automated tests pass (593 total)
+cd Packages/PMUtilities && swift test  # 1 test
+cd Packages/PMDomain && swift test     # 85 tests
+cd Packages/PMData && swift test       # 77 tests
+cd Packages/PMDesignSystem && swift test # 20 tests
+cd Packages/PMServices && swift test   # 173 tests
+cd Packages/PMFeatures && swift test   # 237 tests
 ```
-- [ ] All 514 tests pass
+- [ ] All 593 tests pass
 - [ ] macOS app builds: `xcodebuild -scheme ProjectManager -destination 'platform=macOS' build`
 - [ ] iOS app builds (if Xcode project configured for iOS target)
 
@@ -73,7 +75,7 @@ cd Packages/PMFeatures && swift test  # 197 tests
 ### 2.1 — Settings Panel Display
 - Click "Settings" in the sidebar
 - [ ] Settings panel appears with scrollable card sections
-- [ ] Sections visible: **Focus Board, Check-in Prompts, Time Estimates, Notifications, Done Column, Voice Input, AI Assistant, Data Export, Life Planner Sync, Integration API**
+- [ ] Sections visible: **Focus Board, Check-in Prompts, Time Estimates, Notifications, Done Column, Voice Input, AI Assistant, Data Export, iCloud Sync, Life Planner Sync, Integration API**
 
 ### 2.2 — Focus Board Settings
 - [ ] "Max focus slots" stepper works (range 1-10)
@@ -115,15 +117,19 @@ cd Packages/PMFeatures && swift test  # 197 tests
 - [ ] If no export service configured: shows "Export service not configured" message
 - Note: Full export testing requires the export service to be wired up at the app level
 
-### 2.10 — Life Planner Sync
+### 2.10 — iCloud Sync
+- [ ] "Enable iCloud sync" toggle works
+- [ ] When ON: sync status or additional options appear
+
+### 2.11 — Life Planner Sync
 - [ ] "Enable sync" toggle works
 - [ ] When ON: sync method picker appears (MySQL/REST API/File Export)
 
-### 2.11 — Integration API
+### 2.12 — Integration API
 - [ ] "Enable API" toggle works
 - [ ] When ON: port stepper appears (range 1024-65535)
 
-### 2.12 — Settings Persistence
+### 2.13 — Settings Persistence
 - Note 3-4 setting values you changed
 - Quit the app (Cmd+Q)
 - Relaunch the app
@@ -246,7 +252,7 @@ cd Packages/PMFeatures && swift test  # 197 tests
 - Click on "Hospital Workflow System" in the project list
 - [ ] **CRITICAL:** Project detail view appears (navigation works)
 - [ ] Project name is displayed prominently
-- [ ] Tabs or sections visible (e.g., Overview, Roadmap, Documents)
+- [ ] All six tabs visible: **Roadmap, Timeline, Documents, Analytics, Review, Overview**
 
 > **If this fails:** Navigation is broken. Mark remainder of Part 5 as BLOCKED.
 
@@ -329,6 +335,20 @@ cd Packages/PMFeatures && swift test  # 197 tests
 - [ ] Document management interface appears
 - [ ] "+" menu shows: Vision Statement, Technical Brief, Other Document
 
+### 5.11a — Document Type Filter (Phase 28.4)
+- Ensure the project has at least one Vision Statement and one Technical Brief document (create them if needed)
+- [ ] A segmented picker is visible in the document header with options: **All, Vision, Brief, Other**
+- [ ] Default selection is "All" — all documents are shown
+- Select "Vision"
+- [ ] Only Vision Statement documents are shown in the document list
+- Select "Brief"
+- [ ] Only Technical Brief documents are shown
+- Select "Other"
+- [ ] Only "Other" type documents are shown (or empty list if none exist)
+- Select "All"
+- [ ] All documents are shown again
+- [ ] The selected document in the editor is unaffected by filter changes (if the selected document is still visible)
+
 ### 5.12 — Create a Vision Statement
 - Click "+" → Vision Statement
 - [ ] New document appears in the document list
@@ -365,7 +385,15 @@ cd Packages/PMFeatures && swift test  # 197 tests
 - [ ] Second document appears in list
 - [ ] Selecting between documents switches the editor content
 
-### 5.16 — Navigate Back
+### 5.16 — Overview Tab
+- Click the "Overview" tab in the project detail
+- [ ] **Definition of Done** section shows the project's DoD text
+- [ ] **Original Capture** section shows the quick capture transcript (if project was created via Quick Capture)
+- [ ] Original Capture text is selectable
+- [ ] **Notes** section shows any notes (if set)
+- [ ] **Phases** section lists all phases with their statuses
+
+### 5.17 — Navigate Back
 - Click the back button / breadcrumb to return to the project list
 - [ ] Returns to Project Browser successfully
 - Click into "Hospital Workflow System" again
@@ -473,8 +501,9 @@ cd Packages/PMFeatures && swift test  # 197 tests
 - Go to "All Projects"
 - [ ] New project "Pharmacy Automation Research" (or similar) appears in the list
 - [ ] Project is in **Idea** lifecycle state
-- Click into it
-- [ ] The quick capture transcript text is stored on the project
+- Click into it → go to the **Overview** tab
+- [ ] The quick capture transcript text is shown under "Original Capture"
+- [ ] The text is selectable
 
 ### 7.3 — Quick Capture via Keyboard Shortcut
 - Press **Cmd+Shift+N**
@@ -556,20 +585,32 @@ cd Packages/PMFeatures && swift test  # 197 tests
 - Send
 - [ ] AI response demonstrates awareness of the project's phases, milestones, and tasks
 - [ ] Response includes specific task names or milestone names from the project
+- [ ] If the project has a quick capture transcript or notes, the AI's response shows awareness of that context
 
-### 9.4 — Conversation History
+### 9.4 — Markdown Rendering
+- Ask the AI: `Can you give me a bulleted list of steps to plan a new project?`
+- [ ] AI response renders markdown: **bold**, *italic*, bullet points, headers display as formatted text (not raw `*` or `#` symbols)
+- [ ] User messages remain as plain text (no markdown interpretation)
+
+### 9.5 — Text Selection
+- Try selecting text in an AI response message
+- [ ] Text is selectable (can highlight and copy)
+- Try selecting text in a user message
+- [ ] Text is selectable
+
+### 9.6 — Conversation History
 - Send several messages back and forth
 - [ ] All messages appear in chronological order
 - [ ] User messages and assistant messages are visually distinct (different alignment or colour)
 - [ ] Scrolling works if messages exceed the visible area
 
-### 9.5 — Clear Chat
+### 9.7 — Clear Chat
 - Look for a clear/trash button
 - Click it
 - [ ] All messages are removed
 - [ ] Chat returns to empty state
 
-### 9.6 — Voice Input in Chat
+### 9.8 — Voice Input in Chat
 - Look for a microphone button in the chat input area
 - [ ] Microphone button is visible
 - Click it
@@ -620,23 +661,74 @@ cd Packages/PMFeatures && swift test  # 197 tests
 
 ---
 
-## PART 11: AI Chat — Conversation Persistence
-**Tests phases:** 13.5 (conversation persistence)
+## PART 11: AI Chat — Conversation Persistence & History
+**Tests phases:** 13.5 (conversation persistence), 28.1 (conversation history UI)
 
-### 11.1 — Conversation Saves Automatically
-- Have an active chat conversation with several messages
+### 11.1 — Conversations Persist to Database
+- Have an active chat conversation with several messages in AI Chat
 - Note the conversation content
-- Quit the app (Cmd+Q)
-- Relaunch the app
-- Go to AI Chat
-- [ ] If conversation history feature is visible: previously saved conversations appear
-- [ ] You can resume a previous conversation
+- Quit the app (Cmd+Q) and relaunch
+- Go to AI Chat (sidebar)
+- [ ] Chat starts empty (conversations are loaded via history popover)
 
-### 11.2 — Multiple Conversations
-- Start a new conversation (clear chat)
-- Send a different message
-- [ ] This creates a new conversation
-- [ ] Previous conversations remain accessible (if a conversation list is shown)
+### 11.2 — Switching Projects Clears Chat
+- In AI Chat, select a project from the Project dropdown and send a message
+- Switch to a different project using the same dropdown
+- [ ] Chat messages are cleared when you switch projects
+- [ ] The new project context is used for subsequent messages
+
+### 11.3 — Conversation History Button
+- In AI Chat, look for the clock icon (clock.arrow.circlepath) button in the header bar, between the conversation type picker and the (i) info button
+- Click it
+- [ ] A "Conversations" popover appears
+- [ ] A "New" button with a plus icon is visible at the top
+
+### 11.4 — Conversation History — List Display
+- Have at least one prior conversation (send some messages, then clear or switch projects to start a new one)
+- Open the history popover
+- [ ] Saved conversations are listed, sorted by most recently updated first
+- [ ] Each row shows: conversation type label (e.g. "General", "Review"), relative date (e.g. "2 min ago")
+- [ ] Each row shows a preview of the first message (truncated to ~60 characters)
+- [ ] Each row shows the message count (e.g. "4 messages")
+
+### 11.5 — Resume a Conversation
+- Open the history popover
+- Click on a saved conversation
+- [ ] The popover closes
+- [ ] The chat message list is populated with the conversation's messages
+- [ ] The conversation type picker updates to match the resumed conversation's type
+- [ ] You can continue the conversation by sending new messages
+
+### 11.6 — Delete a Conversation
+- Open the history popover
+- Right-click on a conversation row
+- [ ] A context menu appears with a "Delete" option (destructive style)
+- Click "Delete"
+- [ ] The conversation is removed from the list
+- [ ] If the deleted conversation was the active one, the chat is cleared
+
+### 11.7 — New Conversation from History
+- While in an active conversation, open the history popover
+- Click the "New" button
+- [ ] The popover closes
+- [ ] The current chat is cleared
+- [ ] You can start a fresh conversation
+
+### 11.8 — History Loads on Project Switch
+- Send some messages under project A
+- Switch to project B (via the project dropdown)
+- Open the history popover
+- [ ] The conversation list shows conversations for project B (not project A)
+- Switch back to project A
+- Open history popover again
+- [ ] The conversation list shows conversations for project A
+
+### 11.9 — AI Capabilities Info Button
+- In AI Chat, look for the (i) info button in the top-right of the header bar (next to the trash icon)
+- Click it
+- [ ] A popover appears listing all AI actions, split into "Minor actions" and "Major actions"
+- [ ] The description at the top reflects the current trust level (default: "All actions require your confirmation")
+- [ ] Actions listed include: Complete Task, Move Task, Complete Subtask, Create Subtask, Create Phase, Create Milestone, Create Task, Delete Task, Delete Subtask, Create Document, Update Notes, Update Document, Flag Blocked, Set Waiting, Increment Deferred, Suggest Scope Reduction
 
 **Observations:**
 
@@ -645,42 +737,75 @@ cd Packages/PMFeatures && swift test  # 197 tests
 ## PART 12: Check-In, Onboarding, Retrospective Flows
 **Tests phases:** 14 (check-in), 15 (onboarding), 17 (retrospective)
 
-> These flows may be triggered from specific views or buttons rather than the sidebar.
-> Look for trigger buttons within project detail views, focus board, or chat.
-
 ### 12.1 — Check-In Flow
-- Look for a check-in prompt or button on the Focus Board or within a project detail
-- [ ] Check-in entry point exists (describe where you found it)
-- If accessible:
-  - [ ] Check-in urgency badges appear on projects that haven't been checked in
-  - [ ] Starting a check-in presents depth options: Quick Log vs Full Conversation
-  - [ ] Quick Log: brief update → AI confirms → proposed changes
-  - [ ] Full Conversation: deeper AI-guided conversation
-  - [ ] Snooze option available (1 day / 3 days / 1 week)
+- **Entry point:** Focus Board → check-in urgency banner on a project section
+- Each focused project on the Focus Board has a check-in banner below its header if it hasn't been checked in recently
+- The banner shows urgency level (green "Up to date", blue "Check-in suggested", orange "Check-in recommended", red "Check-in overdue") with a "Check In" button
+- Click "Check In" on a project banner
+- [ ] A sheet opens with the title "Check-In: [Project Name]"
+- [ ] The urgency indicator and "Last check-in: X days ago" text are shown at the top
+- [ ] A segmented picker offers two depths: **Quick Log** and **Full Conversation**
+- [ ] A text input area appears (Quick Log asks "What did you work on?", Full asks "How is the project going?")
+- Type a brief update and click "Start Check-In"
+- [ ] A loading spinner appears while the AI processes
+- [ ] An "AI Summary" section appears with the AI's response text
+- [ ] If the AI proposed actions, a "Suggested Actions" card appears with Apply/Skip buttons
+- [ ] Clicking "Apply" executes the suggested actions
+- [ ] A "Snooze" menu is available with options: **1 Day**, **3 Days**, **1 Week**
 
 ### 12.2 — Onboarding Flow
-- Navigate to the Quick Capture idea you created earlier ("Pharmacy Automation Research")
-- Look for an "Onboard" or "Plan this project" button
-- [ ] Onboarding entry point exists (describe where you found it)
-- If accessible:
-  - [ ] Brain dump step: you can add initial thoughts
-  - [ ] AI Discovery step: AI asks clarifying questions
-  - [ ] Structure Proposal step: AI proposes phases/milestones/tasks
-  - [ ] You can review and accept/reject individual items
-  - [ ] Completing onboarding transitions project from Idea to Queued
+- **Entry point:** All Projects (sidebar) → right-click an **Idea**-state project → "Plan This Project"
+- Navigate to the project browser and find the Quick Capture idea created earlier ("Pharmacy Automation Research")
+- Right-click it to open the context menu
+- [ ] "Plan This Project" menu item appears (only visible for Idea-state projects)
+- Click "Plan This Project"
+- [ ] An onboarding sheet opens
+- [ ] **Brain Dump step:** a text area to add initial thoughts about the project
+- [ ] **AI Discovery step:** AI asks clarifying questions about the project
+- [ ] **Structure Proposal step:** AI proposes phases, milestones, and tasks
+- [ ] You can review and accept/reject individual proposed items
+- [ ] Completing onboarding transitions the project from Idea to Queued state
+- Also available: the "+" menu in the Project Browser toolbar has a "New Project (AI-Assisted)" option that opens a fresh onboarding flow
+
+### 12.2a — Adaptive Onboarding First Message (Phase 28.3)
+- Start a new onboarding flow (either via "New Project (AI-Assisted)" or right-click an Idea project)
+- Enter a detailed brain dump, e.g.: `I want to build a home automation system using Raspberry Pi. It should control lights, temperature, and door locks. I'm targeting my 3-bedroom house and want it to work with HomeKit.`
+- Click "Analyze with AI"
+- [ ] The AI's first response reflects understanding of the intent — it does NOT just repeat your words verbatim
+- [ ] The AI acknowledges strengths or interesting aspects of the idea
+- [ ] The AI asks 2-3 targeted follow-up questions about things you DIDN'T cover (e.g., budget, timeline, security)
+- [ ] The AI does NOT ask generic questions about things already stated (e.g., it should not ask "What's the core goal?" when you already described it)
+
+### 12.2b — Structured Document Generation (Phase 28.2)
+- Complete the onboarding discovery step for a medium or complex project
+- When the "Generate Documents" button appears, click it
+- [ ] The generated Vision Statement contains structured sections:
+  - Overall Intention, Core Design Principles, High-Level System Shape, Target User & Context, Key Workflows, Definition of Done, What This Is NOT
+- [ ] Each section has substantive content (not just placeholder headings)
+- For complex projects:
+- [ ] The generated Technical Brief contains structured sections:
+  - Overview, Key Architectural Decisions, Architecture, Data Model, Key Technologies, Constraints & Requirements, Phase Breakdown
+- [ ] Technical decisions are specific (names concrete technologies, not vague options)
 
 ### 12.3 — Retrospective Flow
-- This triggers when all milestones in a phase are completed
-- If you have a phase with all milestones completed:
-  - [ ] Retrospective prompt appears
-  - [ ] AI guides reflection conversation
-  - [ ] Notes are stored on the Phase record
-- [ ] Snooze option available
+- **Entry point:** Project Detail view → banner appears at the top when a phase has all milestones completed
+- Navigate to a project and complete all milestones in a phase (mark all tasks as completed)
+- [ ] A banner appears at the top of the Project Detail view: "Phase '[name]' is complete!" with a flag.checkered icon
+- [ ] "Start Retrospective" button opens a sheet
+- [ ] AI guides a reflection conversation through steps: idle → prompt → reflecting → AI conversation → completed
+- [ ] Notes are stored on the Phase record (retrospectiveNotes, retrospectiveCompletedAt)
+- [ ] A "Snooze" menu next to the button offers: 1 Day, 3 Days, 1 Week
+- **Alternative entry:** In the Roadmap tab within Project Detail, right-click a completed phase → "Start Retrospective"
 
 ### 12.4 — Return Briefing
-- If a project has been unfocused for 14+ days and is then refocused:
-  - [ ] Return briefing card appears in the chat
-  - [ ] Briefing summarizes: where things stood, what was in progress, suggested next steps
+- **Entry point:** AI Chat → select a project from the dropdown that hasn't had a check-in in 14+ days
+- In AI Chat, use the Project dropdown to select a project that you haven't checked in on
+- [ ] A purple "Welcome Back" card appears at the top of the message list
+- [ ] Card shows a counterclockwise arrow icon and "Welcome Back" header
+- [ ] Briefing text summarizes: where things stood, what's in progress, suggested next steps
+- [ ] Briefing text is selectable (.textSelection(.enabled))
+- [ ] An X button in the top-right of the card dismisses it
+- [ ] No raw [ACTION:...] tags are visible in the briefing text
 
 **Observations:**
 
@@ -690,31 +815,38 @@ cd Packages/PMFeatures && swift test  # 197 tests
 **Tests phases:** 24 (estimate calibration & analytics)
 
 ### 13.1 — Access Analytics
-- Look for an analytics view or section (may be within project detail, settings, or AI chat)
-- [ ] Analytics entry point exists (describe where you found it)
-- If accessible:
-  - [ ] Estimate accuracy gauge/display is shown
-  - [ ] If enough completed tasks: accuracy trend is visible
-  - [ ] Effort type breakdown is shown
-  - [ ] Frequently deferred tasks list is shown
-  - [ ] **ADHD guardrails verified:** No streaks, no gamification, no red/green scoring
-  - [ ] Observations are neutral/compassionate in tone
+- **Entry point:** Project Detail → **Analytics** tab (4th tab, after Roadmap, Timeline, Documents)
+- Navigate to a project detail view and click the "Analytics" tab
+- [ ] Analytics view appears
+- [ ] Estimate accuracy gauge is shown (uses neutral accent colour, not red/green)
+- [ ] If enough completed tasks with estimates: accuracy trend arrow is visible (uses secondary colour)
+- [ ] Effort type breakdown section is shown
+- [ ] Frequently deferred tasks list is shown (tasks deferred 3+ times)
+- [ ] **ADHD guardrails verified:** No streaks, no gamification, no red/green scoring
+- [ ] Suggested pessimism multiplier is displayed if applicable
 
 **Observations:**
 
 ---
 
-## PART 14: AI Project Reviews
+## PART 14: AI Project Reviews (Portfolio Review)
 **Tests phases:** 25 (AI project reviews)
 
-### 14.1 — Access Project Review
-- Look for a "Review" button or conversation type in the AI Chat
-- [ ] Project review entry point exists (describe where)
-- If accessible:
-  - [ ] Review shows cross-project patterns
-  - [ ] Waiting item alerts are surfaced
-  - [ ] AI provides analytical observations about focus board state
-  - [ ] Suggestions for scope reduction or priority changes
+### 14.1 — Access Portfolio Review
+- **Entry point:** Focus Board → sparkles icon button in the toolbar (top-right area)
+- Click the sparkles button
+- [ ] A Portfolio Review sheet appears
+- [ ] Review shows cross-project patterns and observations
+- [ ] Waiting item alerts are surfaced
+- [ ] AI provides analytical observations about your focus board state
+- [ ] Suggestions for scope reduction or priority changes
+- [ ] Messages alternate between user (blue person.circle icon) and assistant (purple sparkles icon)
+
+### 14.2 — Review via Chat
+- In AI Chat (sidebar), change the conversation type dropdown from "General" to **"Review"**
+- Select a project from the Project dropdown
+- Send a message asking for a project review
+- [ ] AI provides review-oriented analysis of the selected project's state
 
 **Observations:**
 
@@ -724,14 +856,30 @@ cd Packages/PMFeatures && swift test  # 197 tests
 **Tests phases:** 27 (adversarial review)
 
 ### 15.1 — Access Adversarial Review
-- Look for an adversarial review entry point (may be in project detail or a separate section)
-- [ ] Entry point exists (describe where)
-- If accessible:
-  - [ ] Step indicator shows the pipeline stages
-  - [ ] Export step: documents can be exported for external review
-  - [ ] Import step: critiques can be imported (paste or file)
-  - [ ] Synthesis step: AI synthesizes critiques
-  - [ ] Revision step: revised documents presented for approval
+- **Entry point:** Project Detail → **Review** tab (5th tab, between Analytics and Overview)
+- Navigate to a project that has documents (e.g., "Hospital Workflow System")
+- Click the "Review" tab
+- [ ] Adversarial review interface appears with a step indicator at the top
+- [ ] Step indicator shows 5 stages: **Export**, **Critiques**, **Synthesise**, **Revise**, **Done**
+
+### 15.2 — Export Step
+- [ ] "Copy Export JSON" button copies valid JSON to clipboard
+- Paste clipboard content into a text editor
+- [ ] JSON contains project documents and metadata
+
+### 15.3 — Import Critiques
+- [ ] "Import Critiques" button opens an import sheet
+- [ ] Sheet contains a TextEditor for pasting critique JSON
+- [ ] Import button is disabled when the text field is empty
+- [ ] Cancel button closes the sheet without importing
+- Paste critique data (or test JSON) and click Import
+- [ ] Critiques are parsed and displayed
+
+### 15.4 — Synthesis & Revision
+- [ ] After importing critiques, a "Synthesise" action is available
+- [ ] Overlapping concern count is shown (concerns mentioned by 2+ reviewers, displayed in red)
+- [ ] After synthesis, revision step presents revised document content
+- [ ] Follow-up text field available with send button (disabled when empty or loading)
 
 **Observations:**
 
@@ -757,8 +905,8 @@ cd Packages/PMFeatures && swift test  # 197 tests
 ### 16.2 — Cascading Delete
 - Create a throwaway project "DELETE CASCADE TEST"
 - Add a phase, milestone, task, and subtask
-- Delete the entire project
-- [ ] Project disappears
+- Delete the entire project (right-click → Delete in Project Browser)
+- [ ] Project disappears from the list
 - Quit and relaunch
 - [ ] No orphaned phases, milestones, tasks, or subtasks remain
 
@@ -780,11 +928,10 @@ cd Packages/PMFeatures && swift test  # 197 tests
 
 ### 17.2 — Task Cards
 - View task cards on the Focus Board
-- [ ] Task cards show: name, project name, milestone name
+- [ ] Task cards show: name, priority badge (if high), effort type badge
 - [ ] Blocked tasks have a red blocked indicator
-- [ ] High-priority tasks have priority badge
-- [ ] Effort type badges display correctly
-- [ ] Overdue/approaching deadline indicators work (if deadlines are set)
+- [ ] Deadline badges appear on tasks with deadlines set (red if overdue, orange if approaching)
+- [ ] Subtask count badge shows (e.g. "2/3") if the task has subtasks
 
 ### 17.3 — Colour Tokens
 - [ ] Focus slot colours are distinct for different projects
@@ -801,10 +948,11 @@ cd Packages/PMFeatures && swift test  # 197 tests
 > This tests the HTTP server via curl commands. Requires the Integration API to be enabled in Settings.
 
 ### 18.1 — Enable the API
-- Go to Settings → Integration API
+- Go to Settings (sidebar) → scroll down to the "Integration API" section
 - Toggle "Enable API" ON
-- Note the port number (default 8420)
-- Restart the app (the server starts on init)
+- Note the port number stepper (default 8420)
+- Note the API Key field (optional)
+- Quit and relaunch the app (the server starts during app initialisation)
 
 ### 18.2 — List Projects
 ```bash
@@ -821,7 +969,7 @@ curl -s http://localhost:8420/api/v1/projects/PROJECT_ID | python3 -m json.tool
 - [ ] Returns JSON for a single project
 
 ### 18.4 — Authentication (if API key set)
-- If you set an API key in Settings:
+- If you set an API key in the Settings Integration API section:
 ```bash
 curl -s http://localhost:8420/api/v1/projects
 ```
@@ -836,38 +984,40 @@ curl -s -H "Authorization: Bearer YOUR_KEY" http://localhost:8420/api/v1/project
 ---
 
 ## PART 19: iOS App (Separate Build)
-**Tests phases:** 20 (iOS app), 20.3 (widget)
+**Tests phases:** 20 (iOS app)
 
-> Build and run the iOS target on a simulator or device.
+> Build and run the iOS target (ProjectManageriOS) on a simulator or device.
 
 ### 19.1 — iOS Launch
-- Build and run the iOS app target
+- Build and run the iOS app target: `xcodebuild build -scheme ProjectManageriOS -destination 'platform=iOS Simulator,name=iPhone 16'`
 - [ ] App launches without crash
-- [ ] Tab bar visible at bottom with: Focus Board, Projects, AI Chat, Quick Capture (+), More
+- [ ] Tab bar visible at bottom with 5 tabs: Focus Board, Projects, AI Chat, Capture (+), More
 
 ### 19.2 — Tab Navigation
-- [ ] Tapping each tab switches the view
-- [ ] Focus Board shows Kanban-style display
-- [ ] Projects shows the project browser list
-- [ ] AI Chat shows the chat interface
-- [ ] Quick Capture shows the capture interface
-- [ ] More shows Settings
+- Tap each tab in the bottom bar
+- [ ] **Focus Board** tab shows Kanban columns (scrolls horizontally on iPhone)
+- [ ] **Projects** tab shows the project browser list
+- [ ] **AI Chat** tab shows the chat interface with project selector and mode picker
+- [ ] **Capture** tab (+) shows the Quick Capture interface
+- [ ] **More** tab shows: Cross-Project Roadmap, Settings, and other secondary views
 
 ### 19.3 — iOS Project Navigation
-- Go to Projects tab
+- Go to the Projects tab
 - Tap on a project
 - [ ] Project detail view appears with navigation
-- [ ] Back button returns to the project list
+- [ ] Back button (or swipe-back gesture) returns to the project list
 
 ### 19.4 — iOS Quick Capture
-- Tap the Quick Capture tab (+)
-- [ ] Capture interface appears
-- Type an idea and save
-- [ ] New project created
+- Tap the Capture tab (+)
+- [ ] Capture interface appears with name field and category picker
+- Type an idea name and save
+- [ ] Success indicator appears
+- [ ] New project appears in the Projects tab as an Idea
 
-### 19.5 — Data Sharing
-- [ ] Projects created on macOS appear on iOS (if using same database/simulator)
-- [ ] Projects created on iOS appear on macOS
+### 19.5 — iOS Focus Board
+- Go to the Focus Board tab
+- [ ] Kanban columns scroll horizontally (not cramped three-column on narrow screens)
+- [ ] Task cards are tappable and show detail popovers
 
 **Observations:**
 
@@ -876,24 +1026,26 @@ curl -s -H "Authorization: Bearer YOUR_KEY" http://localhost:8420/api/v1/project
 ## PART 20: Edge Cases & Stress Tests
 
 ### 20.1 — Long Text
-- Create a project with a very long name (100+ characters)
-- [ ] Text truncates gracefully — no layout breakage
+- In All Projects, create a project with a very long name (100+ characters)
+- [ ] Text truncates gracefully in the project browser list — no layout breakage
+- [ ] Text truncates in the Focus Board task cards if used as a task name
 
 ### 20.2 — Special Characters
 - Create a project named: `Test "Quotes" & <Angles> — Dashes`
-- [ ] Name saves and displays correctly
+- [ ] Name saves and displays correctly in the project browser
 - [ ] No crashes or encoding issues
 
 ### 20.3 — Rapid Actions
-- Quickly create and delete 5 projects in succession
+- Quickly create and delete 5 projects in succession (use right-click → Delete in Project Browser)
 - [ ] No crashes, no orphaned data
-- [ ] App remains responsive
+- [ ] App remains responsive throughout
 
 ### 20.4 — Empty States
-- Delete all projects
-- [ ] Focus Board shows empty state
-- [ ] All Projects shows empty state
-- [ ] Cross-Project Roadmap shows empty state
+- Delete all projects (or use a fresh database)
+- [ ] Focus Board shows empty state message
+- [ ] All Projects shows empty state message
+- [ ] Cross-Project Roadmap shows empty state message
+- [ ] AI Chat works in General mode with no project selected
 - [ ] No crashes on empty data
 
 **Observations:**

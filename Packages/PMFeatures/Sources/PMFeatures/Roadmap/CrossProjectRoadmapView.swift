@@ -2,10 +2,20 @@ import SwiftUI
 import PMDomain
 import PMDesignSystem
 
+/// Tab options for the cross-project roadmap.
+enum RoadmapTab: String, CaseIterable {
+    case upcoming = "Upcoming"
+    case all = "All"
+    case notStarted = "Not Started"
+    case inProgress = "In Progress"
+    case completed = "Completed"
+    case noDeadline = "No Deadline"
+}
+
 /// Cross-project roadmap showing milestones across all projects with deadlines and status.
 public struct CrossProjectRoadmapView: View {
     @Bindable var viewModel: CrossProjectRoadmapViewModel
-    @State private var statusFilter: ItemStatus?
+    @State private var selectedTab: RoadmapTab = .upcoming
 
     public init(viewModel: CrossProjectRoadmapViewModel) {
         self.viewModel = viewModel
@@ -25,11 +35,14 @@ public struct CrossProjectRoadmapView: View {
                     )
                 } else {
                     statsBar
-                    filterBar
-                    overdueSection
-                    upcomingSection
-                    milestonesByProjectSection
-                    unscheduledSection
+                    tabBar
+
+                    // Overdue banner shown on Upcoming and All tabs
+                    if selectedTab == .upcoming || selectedTab == .all {
+                        overdueSection
+                    }
+
+                    milestoneList
                 }
 
                 errorSection
@@ -51,20 +64,17 @@ public struct CrossProjectRoadmapView: View {
         }
     }
 
-    // MARK: - Filter
+    // MARK: - Tab Bar
 
-    private var filterBar: some View {
+    private var tabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                FilterChip(label: "All", isSelected: statusFilter == nil) {
-                    statusFilter = nil
-                }
-                ForEach([ItemStatus.notStarted, .inProgress, .completed], id: \.self) { status in
+                ForEach(RoadmapTab.allCases, id: \.self) { tab in
                     FilterChip(
-                        label: status.rawValue.camelCaseToWords,
-                        isSelected: statusFilter == status
+                        label: tab.rawValue,
+                        isSelected: selectedTab == tab
                     ) {
-                        statusFilter = status
+                        selectedTab = tab
                     }
                 }
             }
@@ -76,7 +86,7 @@ public struct CrossProjectRoadmapView: View {
     @ViewBuilder
     private var overdueSection: some View {
         let overdue = viewModel.overdue
-        if !overdue.isEmpty && statusFilter == nil {
+        if !overdue.isEmpty {
             PMCard {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Overdue", systemImage: "exclamationmark.triangle.fill")
@@ -91,45 +101,35 @@ public struct CrossProjectRoadmapView: View {
         }
     }
 
-    // MARK: - Upcoming
+    // MARK: - Milestone List
 
-    @ViewBuilder
-    private var upcomingSection: some View {
-        let upcoming = viewModel.upcomingDeadlines
-        if !upcoming.isEmpty && statusFilter == nil {
-            PMCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Upcoming Deadlines", systemImage: "calendar.badge.clock")
-                        .font(.headline)
+    private var milestoneList: some View {
+        let filtered = filteredMilestones
+        return Group {
+            if filtered.isEmpty {
+                PMEmptyState(
+                    icon: emptyIcon,
+                    title: "No Milestones",
+                    message: emptyMessage
+                )
+            } else {
+                // Group by project
+                let grouped = Dictionary(grouping: filtered, by: \.projectId)
+                ForEach(Array(grouped.keys.sorted(by: { $0.uuidString < $1.uuidString })), id: \.self) { projectId in
+                    if let projectMilestones = grouped[projectId] {
+                        PMCard {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(SlotColour.forIndex(projectMilestones.first?.colorIndex))
+                                        .frame(width: 10, height: 10)
+                                    Text(projectMilestones.first?.projectName ?? "Project")
+                                        .font(.headline)
+                                }
 
-                    ForEach(upcoming) { milestone in
-                        milestoneRow(milestone)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - By Project
-
-    private var milestonesByProjectSection: some View {
-        let grouped = viewModel.milestonesByProject
-        return ForEach(Array(grouped.keys.sorted(by: { $0.uuidString < $1.uuidString })), id: \.self) { projectId in
-            if let projectMilestones = grouped[projectId] {
-                let filtered = statusFilter.map { status in projectMilestones.filter { $0.status == status } } ?? projectMilestones
-                if !filtered.isEmpty {
-                    PMCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(SlotColour.forIndex(filtered.first?.colorIndex))
-                                    .frame(width: 10, height: 10)
-                                Text(filtered.first?.projectName ?? "Project")
-                                    .font(.headline)
-                            }
-
-                            ForEach(filtered) { milestone in
-                                milestoneRow(milestone)
+                                ForEach(projectMilestones) { milestone in
+                                    milestoneRow(milestone)
+                                }
                             }
                         }
                     }
@@ -138,40 +138,67 @@ public struct CrossProjectRoadmapView: View {
         }
     }
 
-    // MARK: - Unscheduled
+    private var filteredMilestones: [CrossProjectMilestone] {
+        switch selectedTab {
+        case .upcoming:
+            return viewModel.upcomingDeadlines
+        case .all:
+            return viewModel.milestones
+        case .notStarted:
+            return viewModel.milestones(with: .notStarted)
+        case .inProgress:
+            return viewModel.milestones(with: .inProgress)
+        case .completed:
+            return viewModel.milestones(with: .completed)
+        case .noDeadline:
+            return viewModel.unscheduled
+        }
+    }
 
-    @ViewBuilder
-    private var unscheduledSection: some View {
-        let unscheduled = viewModel.unscheduled
-        if !unscheduled.isEmpty && statusFilter == nil {
-            PMCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("No Deadline Set", systemImage: "calendar.badge.minus")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
+    private var emptyIcon: String {
+        switch selectedTab {
+        case .upcoming: "calendar"
+        case .all: "map"
+        case .notStarted: "circle"
+        case .inProgress: "arrow.triangle.2.circlepath"
+        case .completed: "checkmark.circle"
+        case .noDeadline: "calendar.badge.minus"
+        }
+    }
 
-                    ForEach(unscheduled) { milestone in
-                        milestoneRow(milestone)
-                    }
-                }
-            }
+    private var emptyMessage: String {
+        switch selectedTab {
+        case .upcoming: "No milestones with deadlines set."
+        case .all: "No milestones found."
+        case .notStarted: "No milestones waiting to start."
+        case .inProgress: "No milestones in progress."
+        case .completed: "No milestones completed yet."
+        case .noDeadline: "All milestones have deadlines set."
         }
     }
 
     // MARK: - Row
 
     private func milestoneRow(_ milestone: CrossProjectMilestone) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: milestone.status == .completed ? "diamond.fill" : "diamond")
+        let status = milestone.computedStatus
+        return HStack(spacing: 8) {
+            Image(systemName: status == .completed ? "diamond.fill" : "diamond")
                 .font(.caption)
-                .foregroundStyle(statusColor(milestone.status))
+                .foregroundStyle(statusColor(status))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(milestone.milestoneName)
                     .font(.subheadline)
-                Text(milestone.projectName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(milestone.projectName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if milestone.totalTasks > 0 {
+                        Text("\(milestone.completedTasks)/\(milestone.totalTasks) tasks")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
 
             Spacer()
@@ -179,15 +206,15 @@ public struct CrossProjectRoadmapView: View {
             if let deadline = milestone.deadline {
                 Text(deadline, style: .date)
                     .font(.caption)
-                    .foregroundStyle(deadline < Date() && milestone.status != .completed ? .red : .secondary)
+                    .foregroundStyle(deadline < Date() && status != .completed ? .red : .secondary)
             }
 
-            Text(milestone.status.displayName)
+            Text(status.displayName)
                 .font(.caption2)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(statusColor(milestone.status).opacity(0.1), in: Capsule())
-                .foregroundStyle(statusColor(milestone.status))
+                .background(statusColor(status).opacity(0.1), in: Capsule())
+                .foregroundStyle(statusColor(status))
         }
     }
 

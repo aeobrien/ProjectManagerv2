@@ -69,7 +69,8 @@ func makeChatVM(
         taskRepo: taskRepo,
         milestoneRepo: milestoneRepo,
         subtaskRepo: subtaskRepo,
-        projectRepo: projectRepo
+        projectRepo: projectRepo,
+        phaseRepo: phaseRepo
     )
 
     let vm = ChatViewModel(
@@ -79,6 +80,7 @@ func makeChatVM(
         phaseRepo: phaseRepo,
         milestoneRepo: milestoneRepo,
         taskRepo: taskRepo,
+        subtaskRepo: subtaskRepo,
         checkInRepo: checkInRepo,
         conversationRepo: conversationRepo
     )
@@ -415,6 +417,48 @@ struct ChatViewModelTests {
         #expect(vm.returnBriefing == nil)
     }
 
+    @Test("New project with no check-ins should NOT trigger return briefing")
+    @MainActor
+    func newProjectNoReturnBriefing() async {
+        let client = MockLLMClient()
+        let (vm, _, projectRepo, _, _, _, checkInRepo, _) = makeChatVM(llmClient: client)
+        // Project created today — brand new
+        let project = Project(name: "Fresh Project", categoryId: chatCatId, createdAt: Date())
+        projectRepo.projects = [project]
+        // No check-ins
+        checkInRepo.checkIns = []
+
+        await vm.loadProjects()
+        vm.selectedProjectId = project.id
+
+        // Give the async task from didSet time to complete
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(vm.returnBriefing == nil)
+    }
+
+    @Test("Old project with no check-ins SHOULD trigger return briefing")
+    @MainActor
+    func oldProjectTriggersReturnBriefing() async {
+        let client = MockLLMClient()
+        client.responseText = "Welcome back! Here's what happened."
+        let (vm, _, projectRepo, _, _, _, checkInRepo, _) = makeChatVM(llmClient: client)
+        // Project created 30 days ago
+        let oldDate = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
+        let project = Project(name: "Old Project", categoryId: chatCatId, createdAt: oldDate)
+        projectRepo.projects = [project]
+        // No check-ins
+        checkInRepo.checkIns = []
+
+        await vm.loadProjects()
+        vm.selectedProjectId = project.id
+
+        // Give the async task from didSet time to complete
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(vm.returnBriefing != nil)
+    }
+
     @Test("AIAction isMajor classification")
     func actionMajorClassification() {
         #expect(AIAction.completeTask(taskId: UUID()).isMajor == false)
@@ -425,5 +469,8 @@ struct ChatViewModelTests {
         #expect(AIAction.createTask(milestoneId: UUID(), name: "test", priority: .normal, effortType: nil).isMajor == true)
         #expect(AIAction.updateNotes(projectId: UUID(), notes: "test").isMajor == true)
         #expect(AIAction.flagBlocked(taskId: UUID(), blockedType: .poorlyDefined, reason: "test").isMajor == true)
+        #expect(AIAction.createPhase(projectId: UUID(), name: "test").isMajor == true)
+        #expect(AIAction.deleteTask(taskId: UUID()).isMajor == true)
+        #expect(AIAction.deleteSubtask(subtaskId: UUID()).isMajor == true)
     }
 }

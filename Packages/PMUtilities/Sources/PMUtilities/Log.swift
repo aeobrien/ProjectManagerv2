@@ -7,7 +7,7 @@ import os
 /// Categories are organised by module area. All logging uses Apple's
 /// unified logging system (`os.Logger`) for structured, performant output.
 public enum Log {
-    private static let subsystem = "com.projectmanager.app"
+    private static let subsystem = "com.aeobrien.projectmanager"
 
     /// Database operations, CRUD, queries
     public static let data = Logger(subsystem: subsystem, category: "data")

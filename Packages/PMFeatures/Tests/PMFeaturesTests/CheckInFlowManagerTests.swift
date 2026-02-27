@@ -23,7 +23,8 @@ func makeCheckInManager(llmClient: MockLLMClient = MockLLMClient()) -> (
         taskRepo: taskRepo,
         milestoneRepo: milestoneRepo,
         subtaskRepo: subtaskRepo,
-        projectRepo: projectRepo
+        projectRepo: projectRepo,
+        phaseRepo: phaseRepo
     )
 
     let manager = CheckInFlowManager(

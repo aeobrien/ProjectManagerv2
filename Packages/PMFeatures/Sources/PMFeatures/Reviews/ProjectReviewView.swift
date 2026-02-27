@@ -133,9 +133,14 @@ public struct ProjectReviewView: View {
                     Image(systemName: message.role == "user" ? "person.circle" : "sparkles")
                         .foregroundStyle(message.role == "user" ? .blue : .purple)
 
-                    Text(message.content)
-                        .font(.body)
-                        .textSelection(.enabled)
+                    if message.role == "user" {
+                        Text(message.content)
+                            .font(.body)
+                            .textSelection(.enabled)
+                    } else {
+                        MarkdownText(message.content)
+                            .font(.body)
+                    }
                 }
                 .padding(.vertical, 4)
             }

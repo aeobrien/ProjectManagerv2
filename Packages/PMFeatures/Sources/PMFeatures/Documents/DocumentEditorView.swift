@@ -7,6 +7,7 @@ public struct DocumentEditorView: View {
     @Bindable var viewModel: DocumentViewModel
     @State private var showMarkdownPreview = false
     @State private var showVersionHistory = false
+    @State private var typeFilter: DocumentType?
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -71,11 +72,26 @@ public struct DocumentEditorView: View {
 
     // MARK: - Header
 
+    private var filteredDocuments: [Document] {
+        guard let filter = typeFilter else { return viewModel.documents }
+        return viewModel.documents.filter { $0.type == filter }
+    }
+
     private var documentHeader: some View {
         HStack {
             Text("Documents")
                 .font(.title3)
                 .fontWeight(.semibold)
+
+            Picker("Type", selection: $typeFilter) {
+                Text("All").tag(DocumentType?.none)
+                Text("Vision").tag(Optional(DocumentType.visionStatement))
+                Text("Brief").tag(Optional(DocumentType.technicalBrief))
+                Text("Other").tag(Optional(DocumentType.other))
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 250)
 
             Spacer()
 
@@ -99,7 +115,7 @@ public struct DocumentEditorView: View {
     // MARK: - Document List
 
     private var documentList: some View {
-        List(viewModel.documents, selection: Binding(
+        List(filteredDocuments, selection: Binding(
             get: { viewModel.selectedDocument?.id },
             set: { id in
                 if let id, let doc = viewModel.documents.first(where: { $0.id == id }) {

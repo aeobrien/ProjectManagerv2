@@ -60,6 +60,7 @@ public final class OnboardingFlowManager {
     public enum FlowStep: Sendable, Equatable {
         case brainDump
         case aiDiscovery
+        case aiConversation
         case structureProposal
         case creatingProject
         case completed
@@ -67,6 +68,7 @@ public final class OnboardingFlowManager {
 
     public private(set) var step: FlowStep = .brainDump
     public var brainDumpText: String = ""
+    public var repoURL: String = ""
     public private(set) var aiResponse: String = ""
     public private(set) var proposedComplexity: ProjectComplexity = .simple
     public private(set) var proposedItems: [ProposedStructureItem] = []
@@ -75,6 +77,17 @@ public final class OnboardingFlowManager {
     public private(set) var isLoading = false
     public private(set) var error: String?
     public private(set) var createdProjectId: UUID?
+
+    /// Multi-turn conversation state.
+    public private(set) var conversationHistory: [LLMMessage] = []
+    public private(set) var exchangeCount: Int = 0
+    public var maxExchanges: Int = 3
+
+    /// Whether this onboarding was initiated from a markdown import.
+    public var isFromImport: Bool = false
+
+    /// Suggested project name (from import or quick capture).
+    public var suggestedProjectName: String = ""
 
     /// The Idea-state project being onboarded (if any).
     public var sourceProject: Project?
@@ -129,33 +142,52 @@ public final class OnboardingFlowManager {
         step = .aiDiscovery
 
         do {
-            // Include source project transcript if available
+            // Build user message with optional context
             var fullText = text
             if let transcript = sourceProject?.quickCaptureTranscript, !transcript.isEmpty {
                 fullText = "Original capture: \(transcript)\n\nAdditional details: \(text)"
             }
+            let trimmedURL = repoURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedURL.isEmpty {
+                fullText += "\n\nRepository URL: \(trimmedURL)"
+            }
 
-            let history = [LLMMessage(role: .user, content: fullText)]
+            let userMessage = LLMMessage(role: .user, content: fullText)
+            conversationHistory = [userMessage]
+            exchangeCount = 1
+
             let payload = try await contextAssembler.assemble(
                 conversationType: .onboarding,
                 projectContext: nil,
-                conversationHistory: history
+                conversationHistory: conversationHistory,
+                exchangeNumber: exchangeCount,
+                maxExchanges: maxExchanges
             )
 
             let config = LLMRequestConfig()
             let response = try await llmClient.send(messages: payload.messages, config: config)
 
+            Log.ai.debug("Onboarding startDiscovery: raw AI response (\(response.content.count) chars):\n\(response.content.prefix(2000))")
+
             let parsed = actionParser.parse(response.content)
             aiResponse = parsed.naturalLanguage
+            conversationHistory.append(LLMMessage(role: .assistant, content: response.content))
 
-            // Extract proposed structure from actions
-            proposedItems = extractStructure(from: parsed.actions)
-            proposedComplexity = assessComplexity(items: proposedItems)
+            Log.ai.info("Onboarding startDiscovery: \(parsed.actions.count) parsed actions, naturalLanguage=\(parsed.naturalLanguage.count) chars")
 
-            step = .structureProposal
-            let count = proposedItems.count
-            let complexity = proposedComplexity.rawValue
-            Log.ai.info("Onboarding discovery complete: \(count) items, \(complexity) complexity")
+            if !parsed.actions.isEmpty {
+                // AI included ACTION blocks — move to structure proposal
+                proposedItems = extractStructure(from: parsed.actions)
+                proposedComplexity = assessComplexity(items: proposedItems)
+                step = .structureProposal
+                let count = proposedItems.count
+                let complexity = proposedComplexity.rawValue
+                Log.ai.info("Onboarding discovery complete: \(count) proposed items, \(complexity) complexity")
+            } else {
+                // No actions — AI wants more info, enter multi-turn conversation
+                step = .aiConversation
+                Log.ai.info("Onboarding entering multi-turn conversation (exchange \(self.exchangeCount) of \(self.maxExchanges))")
+            }
         } catch {
             self.error = "Discovery failed: \(error.localizedDescription)"
             step = .brainDump
@@ -165,6 +197,70 @@ public final class OnboardingFlowManager {
         isLoading = false
     }
 
+    /// Continue the multi-turn discovery conversation with the user's response.
+    public func continueDiscovery(userResponse: String) async {
+        let text = userResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        isLoading = true
+        error = nil
+        exchangeCount += 1
+
+        do {
+            conversationHistory.append(LLMMessage(role: .user, content: text))
+
+            let payload = try await contextAssembler.assemble(
+                conversationType: .onboarding,
+                projectContext: nil,
+                conversationHistory: conversationHistory,
+                exchangeNumber: exchangeCount,
+                maxExchanges: maxExchanges
+            )
+
+            let config = LLMRequestConfig()
+            let response = try await llmClient.send(messages: payload.messages, config: config)
+
+            Log.ai.debug("Onboarding continueDiscovery: raw AI response (\(response.content.count) chars):\n\(response.content.prefix(2000))")
+
+            let parsed = actionParser.parse(response.content)
+            aiResponse = parsed.naturalLanguage
+            conversationHistory.append(LLMMessage(role: .assistant, content: response.content))
+
+            Log.ai.info("Onboarding continueDiscovery: \(parsed.actions.count) parsed actions, exchangeCount=\(self.exchangeCount)/\(self.maxExchanges)")
+            for (i, action) in parsed.actions.enumerated() {
+                Log.ai.debug("Onboarding continueDiscovery: action[\(i)] = \(String(describing: action))")
+            }
+
+            if !parsed.actions.isEmpty || exchangeCount >= maxExchanges {
+                let reason = !parsed.actions.isEmpty ? "actions present" : "max exchanges reached"
+                Log.ai.info("Onboarding advancing to structureProposal: \(reason)")
+                // Move to structure proposal
+                if !parsed.actions.isEmpty {
+                    proposedItems = extractStructure(from: parsed.actions)
+                    Log.ai.info("Onboarding extractStructure: \(self.proposedItems.count) items from \(parsed.actions.count) actions")
+                } else {
+                    Log.ai.notice("Onboarding: max exchanges reached with 0 actions — proposedItems will be empty")
+                }
+                proposedComplexity = assessComplexity(items: proposedItems)
+                step = .structureProposal
+                Log.ai.info("Onboarding conversation complete after \(self.exchangeCount) exchanges, \(self.proposedItems.count) items, \(self.proposedComplexity.rawValue) complexity")
+            }
+            // Otherwise stay in .aiConversation
+        } catch {
+            self.error = "Discovery failed: \(error.localizedDescription)"
+            Log.ai.error("Onboarding continue discovery failed: \(error)")
+        }
+
+        isLoading = false
+    }
+
+    /// Skip remaining discovery questions and move directly to structure proposal.
+    public func skipToStructure() {
+        proposedComplexity = assessComplexity(items: proposedItems)
+        step = .structureProposal
+        Log.ai.info("Onboarding skipped to structure proposal from exchange \(self.exchangeCount)")
+    }
+
     /// Create the project from the accepted proposal.
     public func createProject(name: String, categoryId: UUID, definitionOfDone: String?) async {
         isLoading = true
@@ -172,6 +268,10 @@ public final class OnboardingFlowManager {
         step = .creatingProject
 
         do {
+            // Resolve repo URL
+            let trimmedURL = repoURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let repoURLValue: String? = trimmedURL.isEmpty ? nil : trimmedURL
+
             // Create or update project
             var project: Project
             if var existing = sourceProject {
@@ -179,6 +279,7 @@ public final class OnboardingFlowManager {
                 existing.categoryId = categoryId
                 existing.definitionOfDone = definitionOfDone
                 existing.lifecycleState = .queued
+                existing.repositoryURL = repoURLValue
                 try await projectRepo.save(existing)
                 syncManager?.trackChange(entityType: .project, entityId: existing.id, changeType: .update)
                 project = existing
@@ -187,7 +288,8 @@ public final class OnboardingFlowManager {
                     name: name,
                     categoryId: categoryId,
                     lifecycleState: .queued,
-                    definitionOfDone: definitionOfDone
+                    definitionOfDone: definitionOfDone,
+                    repositoryURL: repoURLValue
                 )
                 try await projectRepo.save(project)
                 syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
@@ -246,25 +348,43 @@ public final class OnboardingFlowManager {
 
         do {
             let structureSummary = proposedItems.filter(\.accepted).map { "\($0.kind.rawValue): \($0.name)" }.joined(separator: "\n")
-            let prompt = """
-            Based on this project description and structure, generate a vision statement:
 
-            Description: \(brainDumpText)
+            // Build conversation transcript if multi-turn discovery happened
+            var conversationTranscript = ""
+            if conversationHistory.count > 1 {
+                conversationTranscript = "\n\nDiscovery conversation:\n" + conversationHistory.map { msg in
+                    let role = msg.role == .user ? "User" : "Assistant"
+                    return "\(role): \(msg.content)"
+                }.joined(separator: "\n\n")
+            }
 
-            Structure:
+            let visionPrompt = """
+            \(PromptTemplates.visionStatementTemplate)
+
+            ---
+
+            Project description: \(brainDumpText)\(conversationTranscript)
+
+            Proposed structure:
             \(structureSummary)
             """
 
             let messages = [
                 LLMMessage(role: .system, content: PromptTemplates.behaviouralContract),
-                LLMMessage(role: .user, content: prompt)
+                LLMMessage(role: .user, content: visionPrompt)
             ]
             let config = LLMRequestConfig()
             let response = try await llmClient.send(messages: messages, config: config)
             generatedVision = response.content
 
             if proposedComplexity == .complex {
-                let briefPrompt = "Now generate a technical brief for implementation. Include architecture decisions, tech stack recommendations, and key constraints."
+                let briefPrompt = """
+                \(PromptTemplates.technicalBriefTemplate)
+
+                ---
+
+                Use the vision statement above as context. Base your technical decisions on the project's needs.
+                """
                 let briefMessages = messages + [
                     LLMMessage(role: .assistant, content: response.content),
                     LLMMessage(role: .user, content: briefPrompt)
@@ -289,12 +409,17 @@ public final class OnboardingFlowManager {
     public func reset() {
         step = .brainDump
         brainDumpText = ""
+        repoURL = ""
+        isFromImport = false
+        suggestedProjectName = ""
         aiResponse = ""
         proposedItems = []
         generatedVision = nil
         generatedTechBrief = nil
         error = nil
         createdProjectId = nil
+        conversationHistory = []
+        exchangeCount = 0
     }
 
     // MARK: - Helpers
@@ -309,13 +434,21 @@ public final class OnboardingFlowManager {
 
     private func extractStructure(from actions: [AIAction]) -> [ProposedStructureItem] {
         var items: [ProposedStructureItem] = []
-        // Track the last milestone name for parenting tasks
+        // Track the last phase/milestone name for parenting
+        var lastPhaseName: String?
         var lastMilestoneName: String?
-        for action in actions {
+        Log.ai.debug("extractStructure: processing \(actions.count) actions")
+        for (index, action) in actions.enumerated() {
             switch action {
+            case .createPhase(_, let name):
+                lastPhaseName = name
+                lastMilestoneName = nil
+                items.append(ProposedStructureItem(kind: .phase, name: name))
+                Log.ai.debug("extractStructure[\(index)]: phase '\(name)'")
             case .createMilestone(_, let name):
                 lastMilestoneName = name
-                items.append(ProposedStructureItem(kind: .milestone, name: name))
+                items.append(ProposedStructureItem(kind: .milestone, name: name, parentName: lastPhaseName))
+                Log.ai.debug("extractStructure[\(index)]: milestone '\(name)' under phase '\(lastPhaseName ?? "none")'")
             case .createTask(_, let name, let priority, let effortType):
                 items.append(ProposedStructureItem(
                     kind: .task,
@@ -324,10 +457,12 @@ public final class OnboardingFlowManager {
                     priority: priority,
                     effortType: effortType
                 ))
+                Log.ai.debug("extractStructure[\(index)]: task '\(name)' under milestone '\(lastMilestoneName ?? "none")'")
             default:
-                break
+                Log.ai.debug("extractStructure[\(index)]: skipping non-structure action: \(String(describing: action))")
             }
         }
+        Log.ai.info("extractStructure: produced \(items.count) items (phases: \(items.filter { $0.kind == .phase }.count), milestones: \(items.filter { $0.kind == .milestone }.count), tasks: \(items.filter { $0.kind == .task }.count))")
         return items
     }
 

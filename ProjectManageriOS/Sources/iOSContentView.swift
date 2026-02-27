@@ -25,6 +25,7 @@ struct iOSContentView: View {
     @State private var crossProjectRoadmapVM: CrossProjectRoadmapViewModel?
     @State private var initError: String?
     @State private var selectedTab: IOSTab = .focusBoard
+    @State private var voiceManager = VoiceInputManager()
 
     // Cache detail ViewModels by project ID to preserve state across navigation
     @State private var detailVMCache: [UUID: ProjectDetailViewModel] = [:]
@@ -63,7 +64,7 @@ struct iOSContentView: View {
                 } aiChat: {
                     ChatView(viewModel: chatVM)
                 } quickCapture: {
-                    QuickCaptureView(viewModel: quickCaptureVM)
+                    QuickCaptureView(viewModel: quickCaptureVM, voiceManager: voiceManager)
                 } more: {
                     List {
                         if let crossProjectRoadmapVM {
@@ -74,7 +75,7 @@ struct iOSContentView: View {
                             }
                         }
                         NavigationLink {
-                            SettingsView(settings: settingsManager, exportService: exportService, syncManager: syncManager)
+                            makeSettingsView()
                         } label: {
                             Label("Settings", systemImage: "gear")
                         }
@@ -100,6 +101,7 @@ struct iOSContentView: View {
         }
         .task {
             await initialize()
+            await voiceManager.preloadModel()
         }
     }
 
@@ -168,6 +170,26 @@ struct iOSContentView: View {
         }
     }
 
+    @ViewBuilder
+    private func makeSettingsView() -> some View {
+        #if DEBUG
+        SettingsView(
+            settings: settingsManager,
+            exportService: exportService,
+            syncManager: syncManager,
+            aiDevScreenViewModelFactory: projectRepo.map { repo in
+                { AIDevScreenViewModel(projectRepo: repo) }
+            }
+        )
+        #else
+        SettingsView(
+            settings: settingsManager,
+            exportService: exportService,
+            syncManager: syncManager
+        )
+        #endif
+    }
+
     private func initialize() async {
         do {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -208,6 +230,7 @@ struct iOSContentView: View {
                 milestoneRepo: milestoneRepo,
                 subtaskRepo: subtaskRepo,
                 projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
                 documentRepo: documentRepo
             )
 
@@ -313,6 +336,7 @@ struct iOSContentView: View {
                 taskRepo: taskRepo,
                 milestoneRepo: milestoneRepo,
                 phaseRepo: phaseRepo,
+                subtaskRepo: subtaskRepo,
                 checkInRepo: checkInRepo,
                 checkInFlowManager: checkInManager
             )
@@ -326,6 +350,7 @@ struct iOSContentView: View {
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo,
+                subtaskRepo: subtaskRepo,
                 checkInRepo: checkInRepo,
                 conversationRepo: conversationRepo,
                 contextAssembler: ContextAssembler(knowledgeBase: kbManager)
@@ -389,29 +414,30 @@ struct iOSContentView: View {
             self.crossProjectRoadmapVM = CrossProjectRoadmapViewModel(
                 projectRepo: projectRepo,
                 phaseRepo: phaseRepo,
-                milestoneRepo: milestoneRepo
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo
             )
 
             // Initialize notification manager
             // Read live from UserDefaults so mid-session settings changes take effect.
             // UserDefaults is Sendable/thread-safe, unlike @MainActor SettingsManager.
             let delivery = UNNotificationDelivery()
-            let notifDefaults = UserDefaults.standard
             let notifManager = NotificationManager(
                 delivery: delivery,
                 preferences: {
+                    let defaults = UserDefaults.standard
                     var types = Set<NotificationType>()
-                    if notifDefaults.bool(forKey: "settings.notificationsEnabled") {
-                        if notifDefaults.bool(forKey: "settings.notifyWaitingCheckBack") { types.insert(.waitingCheckBack) }
-                        if notifDefaults.bool(forKey: "settings.notifyDeadlineApproaching") { types.insert(.deadlineApproaching) }
-                        if notifDefaults.bool(forKey: "settings.notifyCheckInReminder") { types.insert(.checkInReminder) }
-                        if notifDefaults.bool(forKey: "settings.notifyPhaseCompletion") { types.insert(.phaseCompletion) }
+                    if defaults.bool(forKey: "settings.notificationsEnabled") {
+                        if defaults.bool(forKey: "settings.notifyWaitingCheckBack") { types.insert(.waitingCheckBack) }
+                        if defaults.bool(forKey: "settings.notifyDeadlineApproaching") { types.insert(.deadlineApproaching) }
+                        if defaults.bool(forKey: "settings.notifyCheckInReminder") { types.insert(.checkInReminder) }
+                        if defaults.bool(forKey: "settings.notifyPhaseCompletion") { types.insert(.phaseCompletion) }
                     }
                     return NotificationPreferences(
                         enabledTypes: types,
-                        maxDailyCount: max(1, notifDefaults.integer(forKey: "settings.maxDailyNotifications")),
-                        quietHoursStart: notifDefaults.integer(forKey: "settings.quietHoursStart"),
-                        quietHoursEnd: notifDefaults.integer(forKey: "settings.quietHoursEnd")
+                        maxDailyCount: max(1, defaults.integer(forKey: "settings.maxDailyNotifications")),
+                        quietHoursStart: defaults.integer(forKey: "settings.quietHoursStart"),
+                        quietHoursEnd: defaults.integer(forKey: "settings.quietHoursEnd")
                     )
                 }
             )
@@ -468,7 +494,7 @@ struct iOSContentView: View {
         do {
             let projects = try await projectRepo.fetchAll()
             let focused = projects.first(where: { $0.lifecycleState == .focused })
-            let defaults = UserDefaults(suiteName: "group.com.projectmanager.shared")
+            let defaults = UserDefaults(suiteName: "group.com.aeobrien.projectmanager.shared")
             defaults?.set(projects.count, forKey: "widgetProjectCount")
             defaults?.set(focused?.name, forKey: "widgetFocusedProjectName")
         } catch {

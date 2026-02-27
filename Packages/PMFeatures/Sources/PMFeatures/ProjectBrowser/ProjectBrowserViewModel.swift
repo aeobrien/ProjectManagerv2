@@ -13,7 +13,7 @@ public final class ProjectBrowserViewModel {
     public private(set) var projects: [Project] = []
     public private(set) var categories: [PMDomain.Category] = []
     public private(set) var isLoading = false
-    public private(set) var error: String?
+    public var error: String?
 
     public var searchText: String = "" {
         didSet { Task { await applyFilters() } }
@@ -199,8 +199,25 @@ public final class ProjectBrowserViewModel {
         // Focusing requires slot assignment via FocusManager
         if newState == .focused {
             let currentFocused = projects.filter { $0.lifecycleState == .focused }
+
+            // Check eligibility first for a descriptive error message
+            let eligibility = FocusManager.canFocus(project: project, currentFocused: currentFocused)
+            if case .ineligible(let reason) = eligibility {
+                switch reason {
+                case .boardFull:
+                    error = "Focus Board is full (max \(FocusManager.maxFocusedProjects) projects)"
+                case .categoryLimitReached:
+                    error = "Category limit reached (max \(FocusManager.maxPerCategory) per category). Change a project's category or unfocus one first."
+                case .alreadyFocused:
+                    error = "This project is already focused"
+                case .invalidState:
+                    error = "Only Queued or Idea projects can be focused"
+                }
+                return
+            }
+
             guard let focused = FocusManager.focus(project: project, currentFocused: currentFocused) else {
-                error = "Cannot focus: all slots are full or category diversity violated"
+                error = "Cannot focus project"
                 return
             }
             await updateProject(focused)

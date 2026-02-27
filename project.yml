@@ -1,6 +1,6 @@
 name: ProjectManager
 options:
-  bundleIdPrefix: com.projectmanager
+  bundleIdPrefix: com.aeobrien.projectmanager
   deploymentTarget:
     macOS: "14.0"
     iOS: "17.0"
@@ -34,11 +34,10 @@ targets:
       - package: PMData
       - package: PMDomain
       - package: PMUtilities
-    entitlements:
-      path: ProjectManager/ProjectManager.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app
+        CODE_SIGN_ENTITLEMENTS: ProjectManager/ProjectManager.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeobrien.projectmanager
         PRODUCT_NAME: ProjectManager
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -60,7 +59,7 @@ targets:
       - target: ProjectManager
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeobrien.projectmanager.tests
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
 
@@ -78,11 +77,10 @@ targets:
       - package: PMData
       - package: PMDomain
       - package: PMUtilities
-    entitlements:
-      path: ProjectManageriOS/ProjectManageriOS.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.ios
+        CODE_SIGN_ENTITLEMENTS: ProjectManageriOS/ProjectManageriOS.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeobrien.projectmanager.ios
         PRODUCT_NAME: ProjectManager
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -106,7 +104,7 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - projectmanager
-            CFBundleURLName: "com.projectmanager.app.ios"
+            CFBundleURLName: "com.aeobrien.projectmanager.ios"
 
   QuickCaptureWidgetExtension:
     type: app-extension
@@ -116,11 +114,10 @@ targets:
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
-    entitlements:
-      path: ProjectManageriOS/QuickCaptureWidgetExtension.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.projectmanager.app.ios.widget
+        CODE_SIGN_ENTITLEMENTS: ProjectManageriOS/QuickCaptureWidgetExtension.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeobrien.projectmanager.ios.widget
         PRODUCT_NAME: QuickCaptureWidgetExtension
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"

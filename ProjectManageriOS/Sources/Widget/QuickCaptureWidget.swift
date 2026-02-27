@@ -37,13 +37,13 @@ struct QuickCaptureProvider: TimelineProvider {
 
     /// Read project count from shared UserDefaults (App Group).
     private func readProjectCount() -> Int {
-        let defaults = UserDefaults(suiteName: "group.com.projectmanager.shared")
+        let defaults = UserDefaults(suiteName: "group.com.aeobrien.projectmanager.shared")
         return defaults?.integer(forKey: "projectCount") ?? 0
     }
 
     /// Read focused project name from shared UserDefaults (App Group).
     private func readFocusedProjectName() -> String? {
-        let defaults = UserDefaults(suiteName: "group.com.projectmanager.shared")
+        let defaults = UserDefaults(suiteName: "group.com.aeobrien.projectmanager.shared")
         return defaults?.string(forKey: "focusedProjectName")
     }
 }

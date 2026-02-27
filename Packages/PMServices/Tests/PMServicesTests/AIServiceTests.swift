@@ -143,6 +143,11 @@ struct PromptTemplateTests {
         #expect(docs.contains("CREATE_MILESTONE"))
         #expect(docs.contains("CREATE_TASK"))
         #expect(docs.contains("CREATE_DOCUMENT"))
+        #expect(docs.contains("DELETE_TASK"))
+        #expect(docs.contains("DELETE_SUBTASK"))
+        #expect(docs.contains("MOVE_TASK"))
+        #expect(docs.contains("COMPLETE_SUBTASK"))
+        #expect(docs.contains("CREATE_PHASE"))
     }
 
     @Test("Quick log prompt includes project name")
@@ -161,18 +166,56 @@ struct PromptTemplateTests {
 
     @Test("System prompt dispatch for all types")
     func systemPromptDispatch() {
-        for type in [ConversationType.checkInQuickLog, .checkInFull, .onboarding, .review, .retrospective, .reEntry, .general] {
+        for type in [ConversationType.checkInQuickLog, .checkInFull, .onboarding, .review, .retrospective, .reEntry, .general, .visionDiscovery] {
             let prompt = PromptTemplates.systemPrompt(for: type, projectName: "Test")
             #expect(!prompt.isEmpty)
             #expect(prompt.contains("BEHAVIOURAL CONTRACT"))
         }
     }
 
-    @Test("Onboarding prompt has project questions")
+    @Test("Onboarding prompt has vision statement awareness")
     func onboardingPrompt() {
         let prompt = PromptTemplates.onboarding()
-        #expect(prompt.contains("core goal"))
-        #expect(prompt.contains("done"))
+        #expect(prompt.contains("vision statement"))
+        #expect(prompt.contains("scope exclusions"))
+        #expect(prompt.contains("Definition of done"))
+    }
+
+    @Test("Onboarding prompt includes exchange counter")
+    func onboardingPromptExchangeCounter() {
+        let prompt = PromptTemplates.onboarding(exchangeNumber: 2, maxExchanges: 3)
+        #expect(prompt.contains("exchange 2 of 3"))
+    }
+
+    @Test("Onboarding prompt final exchange requires actions")
+    func onboardingPromptFinalExchange() {
+        let prompt = PromptTemplates.onboarding(exchangeNumber: 3, maxExchanges: 3)
+        #expect(prompt.contains("FINAL EXCHANGE"))
+        #expect(prompt.contains("MUST"))
+        #expect(prompt.contains("ACTION blocks"))
+    }
+
+    @Test("Onboarding prompt non-final allows questions")
+    func onboardingPromptNonFinal() {
+        let prompt = PromptTemplates.onboarding(exchangeNumber: 1, maxExchanges: 3)
+        #expect(!prompt.contains("FINAL EXCHANGE"))
+        #expect(prompt.contains("follow-up questions"))
+    }
+
+    @Test("Vision discovery prompt includes project name and exchange")
+    func visionDiscoveryPrompt() {
+        let prompt = PromptTemplates.visionDiscovery(projectName: "My App", exchangeNumber: 1, maxExchanges: 3)
+        #expect(prompt.contains("My App"))
+        #expect(prompt.contains("exchange 1 of 3"))
+        #expect(prompt.contains("imported"))
+        #expect(prompt.contains("READY_FOR_VISION"))
+    }
+
+    @Test("Vision discovery prompt final exchange")
+    func visionDiscoveryFinalExchange() {
+        let prompt = PromptTemplates.visionDiscovery(projectName: "Test", exchangeNumber: 3, maxExchanges: 3)
+        #expect(prompt.contains("FINAL EXCHANGE"))
+        #expect(prompt.contains("READY_FOR_VISION"))
     }
 
     @Test("Retrospective prompt normalises abandonment")
@@ -251,6 +294,58 @@ struct ContextAssemblerTests {
             conversationHistory: []
         )
         #expect(payload.systemPrompt.contains("Design"))
+    }
+
+    @Test("Quick capture transcript included in context")
+    func transcriptInContext() async throws {
+        let assembler = ContextAssembler()
+        var project = Project(name: "Test", categoryId: UUID())
+        project.quickCaptureTranscript = "Build a habit tracker app with streaks"
+        let ctx = ProjectContext(project: project)
+        let payload = try await assembler.assemble(
+            conversationType: .general,
+            projectContext: ctx,
+            conversationHistory: []
+        )
+        #expect(payload.systemPrompt.contains("Original Capture: Build a habit tracker app with streaks"))
+    }
+
+    @Test("Project notes included in context")
+    func notesInContext() async throws {
+        let assembler = ContextAssembler()
+        var project = Project(name: "Test", categoryId: UUID())
+        project.notes = "Focus on iOS first, macOS later"
+        let ctx = ProjectContext(project: project)
+        let payload = try await assembler.assemble(
+            conversationType: .general,
+            projectContext: ctx,
+            conversationHistory: []
+        )
+        #expect(payload.systemPrompt.contains("Notes: Focus on iOS first, macOS later"))
+    }
+
+    @Test("Assemble with exchange parameters uses exchange-aware prompt")
+    func assembleWithExchangeParams() async throws {
+        let assembler = ContextAssembler()
+        let payload = try await assembler.assemble(
+            conversationType: .onboarding,
+            projectContext: nil,
+            conversationHistory: [LLMMessage(role: .user, content: "Build an app")],
+            exchangeNumber: 2,
+            maxExchanges: 3
+        )
+        #expect(payload.systemPrompt.contains("exchange 2 of 3"))
+    }
+
+    @Test("Assemble without exchange parameters uses default prompt")
+    func assembleWithoutExchangeParams() async throws {
+        let assembler = ContextAssembler()
+        let payload = try await assembler.assemble(
+            conversationType: .onboarding,
+            projectContext: nil,
+            conversationHistory: [LLMMessage(role: .user, content: "Build an app")]
+        )
+        #expect(payload.systemPrompt.contains("exchange 1 of 3"))
     }
 
     @Test("Frequently deferred tasks included in context")
@@ -403,6 +498,46 @@ struct ActionParserTests {
         #expect(result.actions.isEmpty)
     }
 
+    @Test("Truncated action block stripped from output")
+    func truncatedActionBlock() {
+        let id = UUID()
+        let response = """
+        Here's the document I created for you.
+
+        [ACTION: CREATE_DOCUMENT] projectId: \(id) title: Design Doc content: This is a very long document that gets cut off by the token lim
+        """
+        let result = parser.parse(response)
+        #expect(result.actions.isEmpty)
+        #expect(result.naturalLanguage == "Here's the document I created for you.")
+        #expect(!result.naturalLanguage.contains("[ACTION"))
+    }
+
+    @Test("Orphaned closing tag stripped")
+    func orphanedClosingTag() {
+        let response = "Some leftover text [/ACTION] and more."
+        let result = parser.parse(response)
+        #expect(result.naturalLanguage == "Some leftover text  and more.")
+        #expect(!result.naturalLanguage.contains("[/ACTION]"))
+    }
+
+    @Test("Parse DELETE_TASK")
+    func parseDeleteTask() {
+        let id = UUID()
+        let response = "[ACTION: DELETE_TASK] taskId: \(id) [/ACTION]"
+        let result = parser.parse(response)
+        #expect(result.actions.count == 1)
+        #expect(result.actions.first == .deleteTask(taskId: id))
+    }
+
+    @Test("Parse DELETE_SUBTASK")
+    func parseDeleteSubtask() {
+        let id = UUID()
+        let response = "[ACTION: DELETE_SUBTASK] subtaskId: \(id) [/ACTION]"
+        let result = parser.parse(response)
+        #expect(result.actions.count == 1)
+        #expect(result.actions.first == .deleteSubtask(subtaskId: id))
+    }
+
     @Test("Parse SUGGEST_SCOPE_REDUCTION")
     func parseScopeReduction() {
         let id = UUID()
@@ -464,25 +599,27 @@ struct BundledConfirmationTests {
 struct ActionExecutorTests {
     @Test("Generate confirmation describes actions")
     @MainActor
-    func generateConfirmation() {
+    func generateConfirmation() async {
         let taskRepo = MockTaskRepository()
         let milestoneRepo = MockMilestoneRepository()
         let subtaskRepo = MockSubtaskRepository()
         let projectRepo = MockProjectRepository()
+        let phaseRepo = MockPhaseRepository()
         let executor = ActionExecutor(
             taskRepo: taskRepo,
             milestoneRepo: milestoneRepo,
             subtaskRepo: subtaskRepo,
-            projectRepo: projectRepo
+            projectRepo: projectRepo,
+            phaseRepo: phaseRepo
         )
 
         let actions: [AIAction] = [
             .completeTask(taskId: UUID()),
             .createSubtask(taskId: UUID(), name: "Write tests")
         ]
-        let confirmation = executor.generateConfirmation(from: actions)
+        let confirmation = await executor.generateConfirmation(from: actions)
         #expect(confirmation.changes.count == 2)
-        #expect(confirmation.changes[0].description.contains("completed"))
+        #expect(confirmation.changes[0].description.contains("task"))
         #expect(confirmation.changes[1].description.contains("Write tests"))
     }
 }
@@ -527,6 +664,18 @@ private final class MockSubtaskRepository: SubtaskRepositoryProtocol, @unchecked
     }
     func delete(id: UUID) async throws { subtasks.removeAll { $0.id == id } }
     func reorder(subtasks: [Subtask]) async throws { self.subtasks = subtasks }
+}
+
+private final class MockPhaseRepository: PhaseRepositoryProtocol, @unchecked Sendable {
+    var phases: [Phase] = []
+    func fetchAll(forProject projectId: UUID) async throws -> [Phase] { phases.filter { $0.projectId == projectId } }
+    func fetch(id: UUID) async throws -> Phase? { phases.first { $0.id == id } }
+    func save(_ phase: Phase) async throws {
+        if let idx = phases.firstIndex(where: { $0.id == phase.id }) { phases[idx] = phase }
+        else { phases.append(phase) }
+    }
+    func delete(id: UUID) async throws { phases.removeAll { $0.id == id } }
+    func reorder(phases: [Phase]) async throws { self.phases = phases }
 }
 
 private final class MockProjectRepository: ProjectRepositoryProtocol, @unchecked Sendable {

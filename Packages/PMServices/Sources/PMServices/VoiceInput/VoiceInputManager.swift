@@ -26,7 +26,7 @@ public final class VoiceInputManager {
     public var editableTranscript: String = ""
 
     /// The Whisper model size to use.
-    public var modelSize: String = "small"
+    public var modelSize: String = "tiny"
 
     // MARK: - Private
 
@@ -37,8 +37,27 @@ public final class VoiceInputManager {
 
     // MARK: - Init
 
-    public init(modelSize: String = "small") {
+    public init(modelSize: String = "tiny") {
         self.modelSize = modelSize
+    }
+
+    // MARK: - Preload
+
+    /// Preload and prewarm the Whisper model so first transcription is fast.
+    /// Prewarming compiles CoreML models for the device's Neural Engine.
+    public func preloadModel() async {
+        guard whisperKit == nil else { return }
+        do {
+            let model = self.modelSize
+            let start = CFAbsoluteTimeGetCurrent()
+            Log.voice.info("Preloading Whisper model: \(model) (with prewarm)")
+            let config = WhisperKitConfig(model: "openai_whisper-\(model)", prewarm: true)
+            whisperKit = try await WhisperKit(config)
+            let duration = CFAbsoluteTimeGetCurrent() - start
+            Log.voice.info("Whisper model preloaded + prewarmed in \(String(format: "%.1f", duration))s")
+        } catch {
+            Log.voice.error("Failed to preload Whisper model: \(error)")
+        }
     }
 
     // MARK: - Recording
@@ -187,9 +206,12 @@ public final class VoiceInputManager {
             if whisperKit == nil {
                 let model = self.modelSize
                 state = .loadingModel
+                let modelStart = CFAbsoluteTimeGetCurrent()
                 Log.voice.info("Loading Whisper model: \(model)")
                 let config = WhisperKitConfig(model: "openai_whisper-\(model)")
                 whisperKit = try await WhisperKit(config)
+                let modelDuration = CFAbsoluteTimeGetCurrent() - modelStart
+                Log.voice.info("Whisper model loaded in \(String(format: "%.1f", modelDuration))s")
                 state = .processing
             }
 
@@ -198,8 +220,11 @@ public final class VoiceInputManager {
                 return
             }
 
+            let transcribeStart = CFAbsoluteTimeGetCurrent()
             let results = try await kit.transcribe(audioPath: url.path)
+            let transcribeDuration = CFAbsoluteTimeGetCurrent() - transcribeStart
             let text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            Log.voice.info("Transcription took \(String(format: "%.1f", transcribeDuration))s")
 
             if text.isEmpty {
                 state = .error("No speech detected.")

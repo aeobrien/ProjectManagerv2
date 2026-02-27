@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var selectedBrowserProject: Project?
     @State private var selectedFocusBoardProject: Project?
     @State private var showQuickCaptureSheet = false
+    @State private var voiceManager = VoiceInputManager()
 
     // Cache detail ViewModels by project ID to preserve expansion state across navigation
     @State private var detailVMCache: [UUID: ProjectDetailViewModel] = [:]
@@ -44,52 +45,42 @@ struct ContentView: View {
     @State private var documentVersionRepo: SQLiteDocumentVersionRepository?
     @State private var checkInRepo: SQLiteCheckInRepository?
     @State private var conversationRepo: SQLiteConversationRepository?
+    @State private var sessionRepo: SQLiteSessionRepository?
+    @State private var processProfileRepo: SQLiteProcessProfileRepository?
+    @State private var deliverableRepo: SQLiteDeliverableRepository?
+    @State private var loadedCategories: [PMDomain.Category] = []
 
     var body: some View {
         Group {
             if let projectBrowserVM, let focusBoardVM, let chatVM, let quickCaptureVM, let crossProjectRoadmapVM {
                 AppNavigationView {
                     if let project = selectedFocusBoardProject {
-                        makeProjectDetailView(project: project)
-                            .toolbar {
-                                ToolbarItem(placement: .navigation) {
-                                    Button {
-                                        selectedFocusBoardProject = nil
-                                    } label: {
-                                        Label("Back", systemImage: "chevron.left")
-                                    }
-                                }
-                            }
-                    } else {
-                        FocusBoardView(viewModel: focusBoardVM, reviewManager: reviewManager) { project in
-                            selectedFocusBoardProject = project
+                        projectDetailWithBack(project: project) {
+                            selectedFocusBoardProject = nil
                         }
+                    } else {
+                        FocusBoardView(viewModel: focusBoardVM, onSelectProject: { project in
+                            selectedFocusBoardProject = project
+                        }, reviewManager: reviewManager)
                     }
                 } projectBrowser: {
                     if let project = selectedBrowserProject {
-                        makeProjectDetailView(project: project)
-                            .toolbar {
-                                ToolbarItem(placement: .navigation) {
-                                    Button {
-                                        selectedBrowserProject = nil
-                                    } label: {
-                                        Label("Back", systemImage: "chevron.left")
-                                    }
-                                }
-                            }
+                        projectDetailWithBack(project: project) {
+                            selectedBrowserProject = nil
+                        }
                     } else {
                         ProjectBrowserView(viewModel: projectBrowserVM, onSelectProject: { project in
                             selectedBrowserProject = project
                         }, onboardingManager: onboardingManager)
                     }
                 } quickCapture: {
-                    QuickCaptureView(viewModel: quickCaptureVM)
+                    QuickCaptureView(viewModel: quickCaptureVM, voiceManager: voiceManager)
                 } crossProjectRoadmap: {
                     CrossProjectRoadmapView(viewModel: crossProjectRoadmapVM)
                 } aiChat: {
                     ChatView(viewModel: chatVM)
                 } settings: {
-                    SettingsView(settings: settingsManager, exportService: exportService, syncManager: syncManager)
+                    makeSettingsView()
                 }
             } else if let initError {
                 VStack(spacing: 12) {
@@ -109,16 +100,33 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showQuickCaptureSheet) {
             if let quickCaptureVM {
-                QuickCaptureView(viewModel: quickCaptureVM)
+                QuickCaptureView(viewModel: quickCaptureVM, voiceManager: voiceManager)
                     .frame(minWidth: 400, minHeight: 300)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickCaptureShortcut)) { _ in
             showQuickCaptureSheet = true
         }
+        .onChange(of: showQuickCaptureSheet) { _, isShowing in
+            if isShowing {
+                quickCaptureVM?.reset()
+            }
+        }
         .task {
             await initialize()
+            await voiceManager.preloadModel()
         }
+    }
+
+    private func projectDetailWithBack(project: Project, onBack: @escaping () -> Void) -> some View {
+        makeProjectDetailView(project: project)
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: onBack) {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                }
+            }
     }
 
     @ViewBuilder
@@ -166,8 +174,74 @@ struct ContentView: View {
             let adversarialVM: AdversarialReviewManager? = documentRepo.map { docRepo in
                 AdversarialReviewManager(documentRepo: docRepo, llmClient: LLMClient())
             }
-            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM)
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM, sessionRepo: sessionRepo)
+        } else {
+            EmptyView()
         }
+    }
+
+    private func makeMigrationViewModel() -> MigrationViewModel {
+        return MigrationViewModel(importer: MarkdownImporter())
+    }
+
+    private func makeAIDevScreenViewModel() -> AIDevScreenViewModel {
+        guard let sessionRepo, let projectRepo, let phaseRepo, let milestoneRepo,
+              let taskRepo, let subtaskRepo, let checkInRepo, let processProfileRepo,
+              let deliverableRepo else {
+            fatalError("AIDevScreen requires all repos to be initialized")
+        }
+
+        let llmClient = LLMClient()
+        let lifecycleManager = SessionLifecycleManager(repo: sessionRepo)
+        let summaryService = SummaryGenerationService(llmClient: llmClient, repo: sessionRepo)
+        let promptComposer = PromptComposer()
+        let contextAssembler = V2ContextAssembler()
+
+        let conversationManager = ConversationManager(
+            llmClient: llmClient,
+            sessionRepo: sessionRepo,
+            lifecycleManager: lifecycleManager,
+            summaryService: summaryService,
+            promptComposer: promptComposer,
+            contextAssembler: contextAssembler
+        )
+
+        return AIDevScreenViewModel(
+            projectRepo: projectRepo,
+            phaseRepo: phaseRepo,
+            milestoneRepo: milestoneRepo,
+            taskRepo: taskRepo,
+            subtaskRepo: subtaskRepo,
+            checkInRepo: checkInRepo,
+            sessionRepo: sessionRepo,
+            processProfileRepo: processProfileRepo,
+            deliverableRepo: deliverableRepo,
+            conversationManager: conversationManager
+        )
+    }
+
+    @ViewBuilder
+    private func makeSettingsView() -> some View {
+        #if DEBUG
+        SettingsView(
+            settings: settingsManager,
+            exportService: exportService,
+            syncManager: syncManager,
+            migrationViewModelFactory: makeMigrationViewModel,
+            onboardingManager: onboardingManager,
+            categories: loadedCategories,
+            aiDevScreenViewModelFactory: makeAIDevScreenViewModel
+        )
+        #else
+        SettingsView(
+            settings: settingsManager,
+            exportService: exportService,
+            syncManager: syncManager,
+            migrationViewModelFactory: makeMigrationViewModel,
+            onboardingManager: onboardingManager,
+            categories: loadedCategories
+        )
+        #endif
     }
 
     private func initialize() async {
@@ -192,6 +266,9 @@ struct ContentView: View {
             let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
             let documentVersionRepo = SQLiteDocumentVersionRepository(db: db.dbQueue)
             let conversationRepo = SQLiteConversationRepository(db: db.dbQueue)
+            let sessionRepo = SQLiteSessionRepository(db: db.dbQueue)
+            let processProfileRepo = SQLiteProcessProfileRepository(db: db.dbQueue)
+            let deliverableRepo = SQLiteDeliverableRepository(db: db.dbQueue)
 
             self.projectRepo = projectRepo
             self.categoryRepo = categoryRepo
@@ -204,12 +281,17 @@ struct ContentView: View {
             self.documentRepo = documentRepo
             self.documentVersionRepo = documentVersionRepo
             self.conversationRepo = conversationRepo
+            self.sessionRepo = sessionRepo
+            self.processProfileRepo = processProfileRepo
+            self.deliverableRepo = deliverableRepo
+            self.loadedCategories = (try? await categoryRepo.fetchAll()) ?? []
 
             var actionExecutor = ActionExecutor(
                 taskRepo: taskRepo,
                 milestoneRepo: milestoneRepo,
                 subtaskRepo: subtaskRepo,
                 projectRepo: projectRepo,
+                phaseRepo: phaseRepo,
                 documentRepo: documentRepo
             )
 
@@ -315,6 +397,7 @@ struct ContentView: View {
                 taskRepo: taskRepo,
                 milestoneRepo: milestoneRepo,
                 phaseRepo: phaseRepo,
+                subtaskRepo: subtaskRepo,
                 checkInRepo: checkInRepo,
                 checkInFlowManager: checkInManager
             )
@@ -328,6 +411,7 @@ struct ContentView: View {
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo,
                 taskRepo: taskRepo,
+                subtaskRepo: subtaskRepo,
                 checkInRepo: checkInRepo,
                 conversationRepo: conversationRepo,
                 contextAssembler: ContextAssembler(knowledgeBase: kbManager)
@@ -346,7 +430,8 @@ struct ContentView: View {
             self.crossProjectRoadmapVM = CrossProjectRoadmapViewModel(
                 projectRepo: projectRepo,
                 phaseRepo: phaseRepo,
-                milestoneRepo: milestoneRepo
+                milestoneRepo: milestoneRepo,
+                taskRepo: taskRepo
             )
 
             // Initialize export service with backend based on Life Planner settings
@@ -399,22 +484,22 @@ struct ContentView: View {
             // Read live from UserDefaults so mid-session settings changes take effect.
             // UserDefaults is Sendable/thread-safe, unlike @MainActor SettingsManager.
             let delivery = UNNotificationDelivery()
-            let notifDefaults = UserDefaults.standard
             let notifManager = NotificationManager(
                 delivery: delivery,
                 preferences: {
+                    let defaults = UserDefaults.standard
                     var types = Set<NotificationType>()
-                    if notifDefaults.bool(forKey: "settings.notificationsEnabled") {
-                        if notifDefaults.bool(forKey: "settings.notifyWaitingCheckBack") { types.insert(.waitingCheckBack) }
-                        if notifDefaults.bool(forKey: "settings.notifyDeadlineApproaching") { types.insert(.deadlineApproaching) }
-                        if notifDefaults.bool(forKey: "settings.notifyCheckInReminder") { types.insert(.checkInReminder) }
-                        if notifDefaults.bool(forKey: "settings.notifyPhaseCompletion") { types.insert(.phaseCompletion) }
+                    if defaults.bool(forKey: "settings.notificationsEnabled") {
+                        if defaults.bool(forKey: "settings.notifyWaitingCheckBack") { types.insert(.waitingCheckBack) }
+                        if defaults.bool(forKey: "settings.notifyDeadlineApproaching") { types.insert(.deadlineApproaching) }
+                        if defaults.bool(forKey: "settings.notifyCheckInReminder") { types.insert(.checkInReminder) }
+                        if defaults.bool(forKey: "settings.notifyPhaseCompletion") { types.insert(.phaseCompletion) }
                     }
                     return NotificationPreferences(
                         enabledTypes: types,
-                        maxDailyCount: max(1, notifDefaults.integer(forKey: "settings.maxDailyNotifications")),
-                        quietHoursStart: notifDefaults.integer(forKey: "settings.quietHoursStart"),
-                        quietHoursEnd: notifDefaults.integer(forKey: "settings.quietHoursEnd")
+                        maxDailyCount: max(1, defaults.integer(forKey: "settings.maxDailyNotifications")),
+                        quietHoursStart: defaults.integer(forKey: "settings.quietHoursStart"),
+                        quietHoursEnd: defaults.integer(forKey: "settings.quietHoursEnd")
                     )
                 }
             )

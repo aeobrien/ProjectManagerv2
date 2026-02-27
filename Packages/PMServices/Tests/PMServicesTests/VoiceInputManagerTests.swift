@@ -17,11 +17,11 @@ struct VoiceInputManagerTests {
         #expect(manager.isProcessing == false)
     }
 
-    @Test("Default model size is small")
+    @Test("Default model size is tiny")
     @MainActor
     func defaultModelSize() {
         let manager = VoiceInputManager()
-        #expect(manager.modelSize == "small")
+        #expect(manager.modelSize == "tiny")
     }
 
     @Test("Custom model size preserved")

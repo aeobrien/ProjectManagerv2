@@ -67,7 +67,7 @@ public struct ProjectBrowserView: View {
             if let onboardingManager {
                 OnboardingView(manager: onboardingManager, categories: categories)
                     #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 500)
+                    .frame(minWidth: 700, idealWidth: 800, minHeight: 600)
                     #endif
             }
         }
@@ -91,6 +91,14 @@ public struct ProjectBrowserView: View {
             }
         } message: { project in
             Text("This will permanently delete \"\(project.name)\" and all its phases, milestones, tasks, and documents. This cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(
+            get: { viewModel.error != nil },
+            set: { if !$0 { viewModel.error = nil } }
+        )) {
+            Button("OK") { viewModel.error = nil }
+        } message: {
+            Text(viewModel.error ?? "")
         }
         .task {
             await viewModel.load()

@@ -242,9 +242,8 @@ public struct AdversarialReviewView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Synthesis", systemImage: "doc.text")
                             .font(.subheadline.weight(.semibold))
-                        Text(synthesis)
+                        MarkdownText(synthesis)
                             .font(.body)
-                            .textSelection(.enabled)
                     }
                 }
             }
@@ -254,9 +253,14 @@ public struct AdversarialReviewView: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: message.role == "user" ? "person.circle" : "sparkles")
                         .foregroundStyle(message.role == "user" ? .blue : .purple)
-                    Text(message.content)
-                        .font(.body)
-                        .textSelection(.enabled)
+                    if message.role == "user" {
+                        Text(message.content)
+                            .font(.body)
+                            .textSelection(.enabled)
+                    } else {
+                        MarkdownText(message.content)
+                            .font(.body)
+                    }
                 }
             }
 

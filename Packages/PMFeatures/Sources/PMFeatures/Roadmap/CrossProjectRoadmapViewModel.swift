@@ -12,6 +12,17 @@ public struct CrossProjectMilestone: Identifiable, Sendable, Equatable {
     public let deadline: Date?
     public let status: ItemStatus
     public let colorIndex: Int  // For project colour-coding
+    public let totalTasks: Int
+    public let completedTasks: Int
+    public let inProgressTasks: Int
+
+    /// Computed status based on task progress rather than the milestone's own status field.
+    public var computedStatus: ItemStatus {
+        guard totalTasks > 0 else { return status }
+        if completedTasks == totalTasks { return .completed }
+        if completedTasks > 0 || inProgressTasks > 0 { return .inProgress }
+        return .notStarted
+    }
 
     public init(
         id: UUID,
@@ -20,7 +31,10 @@ public struct CrossProjectMilestone: Identifiable, Sendable, Equatable {
         projectId: UUID,
         deadline: Date?,
         status: ItemStatus,
-        colorIndex: Int
+        colorIndex: Int,
+        totalTasks: Int = 0,
+        completedTasks: Int = 0,
+        inProgressTasks: Int = 0
     ) {
         self.id = id
         self.milestoneName = milestoneName
@@ -29,6 +43,9 @@ public struct CrossProjectMilestone: Identifiable, Sendable, Equatable {
         self.deadline = deadline
         self.status = status
         self.colorIndex = colorIndex
+        self.totalTasks = totalTasks
+        self.completedTasks = completedTasks
+        self.inProgressTasks = inProgressTasks
     }
 }
 
@@ -66,7 +83,7 @@ public final class CrossProjectRoadmapViewModel {
     /// Milestones that are overdue (past deadline, not completed).
     public var overdue: [CrossProjectMilestone] {
         milestones.filter { ms in
-            guard let deadline = ms.deadline, ms.status != .completed else { return false }
+            guard let deadline = ms.deadline, ms.computedStatus != .completed else { return false }
             return deadline < Date()
         }
     }
@@ -76,17 +93,20 @@ public final class CrossProjectRoadmapViewModel {
     private let projectRepo: ProjectRepositoryProtocol
     private let phaseRepo: PhaseRepositoryProtocol
     private let milestoneRepo: MilestoneRepositoryProtocol
+    private let taskRepo: TaskRepositoryProtocol
 
     // MARK: - Init
 
     public init(
         projectRepo: ProjectRepositoryProtocol,
         phaseRepo: PhaseRepositoryProtocol,
-        milestoneRepo: MilestoneRepositoryProtocol
+        milestoneRepo: MilestoneRepositoryProtocol,
+        taskRepo: TaskRepositoryProtocol
     ) {
         self.projectRepo = projectRepo
         self.phaseRepo = phaseRepo
         self.milestoneRepo = milestoneRepo
+        self.taskRepo = taskRepo
     }
 
     // MARK: - Loading
@@ -105,6 +125,9 @@ public final class CrossProjectRoadmapViewModel {
                 for phase in phases {
                     let projectMilestones = try await milestoneRepo.fetchAll(forPhase: phase.id)
                     for ms in projectMilestones {
+                        let tasks = try await taskRepo.fetchAll(forMilestone: ms.id)
+                        let completedCount = tasks.filter { $0.status == .completed }.count
+                        let inProgressCount = tasks.filter { $0.status == .inProgress }.count
                         allMilestones.append(CrossProjectMilestone(
                             id: ms.id,
                             milestoneName: ms.name,
@@ -112,7 +135,10 @@ public final class CrossProjectRoadmapViewModel {
                             projectId: project.id,
                             deadline: ms.deadline,
                             status: ms.status,
-                            colorIndex: index % 5  // Cycle through 5 SlotColours
+                            colorIndex: index % 5,  // Cycle through 5 SlotColours
+                            totalTasks: tasks.count,
+                            completedTasks: completedCount,
+                            inProgressTasks: inProgressCount
                         ))
                     }
                 }
@@ -136,8 +162,8 @@ public final class CrossProjectRoadmapViewModel {
         isLoading = false
     }
 
-    /// Filter milestones by status.
+    /// Filter milestones by computed status (derived from task progress).
     public func milestones(with status: ItemStatus) -> [CrossProjectMilestone] {
-        milestones.filter { $0.status == status }
+        milestones.filter { $0.computedStatus == status }
     }
 }

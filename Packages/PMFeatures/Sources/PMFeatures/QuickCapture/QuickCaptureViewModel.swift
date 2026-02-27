@@ -17,6 +17,7 @@ public final class QuickCaptureViewModel {
     public private(set) var isSaving = false
     public private(set) var error: String?
     public private(set) var didSave = false
+    private var autoResetTask: Task<Void, Never>?
 
     // MARK: - Dependencies
 
@@ -82,6 +83,7 @@ public final class QuickCaptureViewModel {
             try await projectRepo.save(project)
             syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
             didSave = true
+            scheduleAutoReset()
             Log.ui.info("Quick captured project '\(projectName)'")
         } catch {
             self.error = error.localizedDescription
@@ -91,11 +93,23 @@ public final class QuickCaptureViewModel {
 
     /// Resets the form for a new capture.
     public func reset() {
+        autoResetTask?.cancel()
+        autoResetTask = nil
         transcript = ""
         title = ""
         selectedCategoryId = nil
         error = nil
         didSave = false
+    }
+
+    /// Schedules an automatic form reset after a 2-second success display.
+    private func scheduleAutoReset() {
+        autoResetTask?.cancel()
+        autoResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.reset()
+        }
     }
 
     /// Whether the save button should be enabled.
