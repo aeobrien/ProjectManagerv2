@@ -29,6 +29,7 @@ public final class DocumentViewModel {
     // MARK: - Dependencies
 
     private let projectId: UUID
+    public let projectName: String
     private let documentRepo: DocumentRepositoryProtocol
     private let versionRepo: DocumentVersionRepositoryProtocol?
     private let knowledgeBaseManager: KnowledgeBaseManager?
@@ -36,15 +37,20 @@ public final class DocumentViewModel {
     /// Optional sync manager for tracking document changes.
     public var syncManager: SyncManager?
 
+    /// Whether a folder picker for export is being shown.
+    public var showExportPicker = false
+
     // MARK: - Init
 
     public init(
         projectId: UUID,
+        projectName: String = "",
         documentRepo: DocumentRepositoryProtocol,
         versionRepo: DocumentVersionRepositoryProtocol? = nil,
         knowledgeBaseManager: KnowledgeBaseManager? = nil
     ) {
         self.projectId = projectId
+        self.projectName = projectName
         self.documentRepo = documentRepo
         self.versionRepo = versionRepo
         self.knowledgeBaseManager = knowledgeBaseManager
@@ -260,6 +266,40 @@ public final class DocumentViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // MARK: - Export
+
+    /// Export all non-empty documents as .md files to the given directory URL.
+    /// Returns the number of files written.
+    @discardableResult
+    public func exportAllAsMarkdown(to directory: URL) throws -> Int {
+        let nonEmpty = documents.filter { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !nonEmpty.isEmpty else { return 0 }
+
+        let sanitisedProject = sanitiseFilename(projectName.isEmpty ? "Project" : projectName)
+
+        var count = 0
+        for doc in nonEmpty {
+            let sanitisedTitle = sanitiseFilename(doc.title)
+            let filename = "\(sanitisedProject) — \(sanitisedTitle).md"
+            let fileURL = directory.appendingPathComponent(filename)
+            try doc.content.write(to: fileURL, atomically: true, encoding: .utf8)
+            count += 1
+        }
+
+        let name = self.projectName
+        Log.ui.info("Exported \(count) documents for '\(name)' to \(directory.path)")
+        return count
+    }
+
+    /// Sanitise a string for use in a filename.
+    private func sanitiseFilename(_ name: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/\\:?\"<>|*")
+        return name
+            .components(separatedBy: illegal)
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Computed

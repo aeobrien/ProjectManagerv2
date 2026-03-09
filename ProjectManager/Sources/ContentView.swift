@@ -23,6 +23,9 @@ struct ContentView: View {
     @State private var syncManager: SyncManager?
     @State private var httpServer: HTTPServer?
     @State private var reviewManager: ProjectReviewManager?
+    @State private var dataExporter: DataExporter?
+    @State private var dataImporter: DataImporter?
+    @State private var allProjectsForBackup: [Project] = []
     @State private var initError: String?
     @State private var selectedBrowserProject: Project?
     @State private var selectedFocusBoardProject: Project?
@@ -48,6 +51,8 @@ struct ContentView: View {
     @State private var sessionRepo: SQLiteSessionRepository?
     @State private var processProfileRepo: SQLiteProcessProfileRepository?
     @State private var deliverableRepo: SQLiteDeliverableRepository?
+    @State private var codebaseRepo: SQLiteCodebaseRepository?
+    @State private var codebaseIndexer: CodebaseIndexer?
     @State private var loadedCategories: [PMDomain.Category] = []
 
     var body: some View {
@@ -160,7 +165,7 @@ struct ContentView: View {
             )
             let docVM: DocumentViewModel? = docVMCache[project.id] ?? {
                 guard let documentRepo else { return nil }
-                let vm = DocumentViewModel(projectId: project.id, documentRepo: documentRepo, versionRepo: documentVersionRepo, knowledgeBaseManager: knowledgeBaseManager)
+                let vm = DocumentViewModel(projectId: project.id, projectName: project.name, documentRepo: documentRepo, versionRepo: documentVersionRepo, knowledgeBaseManager: knowledgeBaseManager)
                 vm.syncManager = syncManager
                 DispatchQueue.main.async { docVMCache[project.id] = vm }
                 return vm
@@ -174,7 +179,7 @@ struct ContentView: View {
             let adversarialVM: AdversarialReviewManager? = documentRepo.map { docRepo in
                 AdversarialReviewManager(documentRepo: docRepo, llmClient: LLMClient())
             }
-            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM, sessionRepo: sessionRepo)
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM, sessionRepo: sessionRepo, codebaseRepo: codebaseRepo, codebaseIndexer: codebaseIndexer)
         } else {
             EmptyView()
         }
@@ -187,7 +192,7 @@ struct ContentView: View {
     private func makeAIDevScreenViewModel() -> AIDevScreenViewModel {
         guard let sessionRepo, let projectRepo, let phaseRepo, let milestoneRepo,
               let taskRepo, let subtaskRepo, let checkInRepo, let processProfileRepo,
-              let deliverableRepo else {
+              let deliverableRepo, let codebaseRepo else {
             fatalError("AIDevScreen requires all repos to be initialized")
         }
 
@@ -216,7 +221,10 @@ struct ContentView: View {
             sessionRepo: sessionRepo,
             processProfileRepo: processProfileRepo,
             deliverableRepo: deliverableRepo,
-            conversationManager: conversationManager
+            conversationManager: conversationManager,
+            documentRepo: documentRepo,
+            codebaseIndexer: codebaseIndexer,
+            codebaseRepo: codebaseRepo
         )
     }
 
@@ -230,7 +238,10 @@ struct ContentView: View {
             migrationViewModelFactory: makeMigrationViewModel,
             onboardingManager: onboardingManager,
             categories: loadedCategories,
-            aiDevScreenViewModelFactory: makeAIDevScreenViewModel
+            aiDevScreenViewModelFactory: makeAIDevScreenViewModel,
+            dataExporter: dataExporter,
+            dataImporter: dataImporter,
+            allProjects: allProjectsForBackup
         )
         #else
         SettingsView(
@@ -239,7 +250,10 @@ struct ContentView: View {
             syncManager: syncManager,
             migrationViewModelFactory: makeMigrationViewModel,
             onboardingManager: onboardingManager,
-            categories: loadedCategories
+            categories: loadedCategories,
+            dataExporter: dataExporter,
+            dataImporter: dataImporter,
+            allProjects: allProjectsForBackup
         )
         #endif
     }
@@ -269,6 +283,7 @@ struct ContentView: View {
             let sessionRepo = SQLiteSessionRepository(db: db.dbQueue)
             let processProfileRepo = SQLiteProcessProfileRepository(db: db.dbQueue)
             let deliverableRepo = SQLiteDeliverableRepository(db: db.dbQueue)
+            let codebaseRepo = SQLiteCodebaseRepository(db: db.dbQueue)
 
             self.projectRepo = projectRepo
             self.categoryRepo = categoryRepo
@@ -284,7 +299,11 @@ struct ContentView: View {
             self.sessionRepo = sessionRepo
             self.processProfileRepo = processProfileRepo
             self.deliverableRepo = deliverableRepo
+            self.codebaseRepo = codebaseRepo
             self.loadedCategories = (try? await categoryRepo.fetchAll()) ?? []
+            self.allProjectsForBackup = (try? await projectRepo.fetchAll()) ?? []
+            self.dataExporter = DataExporter(db: db.dbQueue)
+            self.dataImporter = DataImporter(db: db.dbQueue)
 
             var actionExecutor = ActionExecutor(
                 taskRepo: taskRepo,
@@ -299,8 +318,11 @@ struct ContentView: View {
             let kbStore = InMemoryKnowledgeBaseStore()
             let kbManager = KnowledgeBaseManager(store: kbStore, embeddingService: embeddingService)
             self.knowledgeBaseManager = kbManager
+            let cbIndexer = CodebaseIndexer(kbManager: kbManager, codebaseRepo: codebaseRepo, documentRepo: documentRepo, llmClient: LLMClient())
+            self.codebaseIndexer = cbIndexer
 
             let syncDataProvider = RepositorySyncDataProvider(
+                dbQueue: db.dbQueue,
                 projectRepo: projectRepo,
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo,
@@ -313,7 +335,7 @@ struct ContentView: View {
                 dependencyRepo: dependencyRepo
             )
             let syncBackend = CloudKitSyncBackend()
-            let syncQueue = InMemorySyncQueue()
+            let syncQueue = SQLiteSyncQueue(dbQueue: db.dbQueue)
             let syncEngine = SyncEngine(
                 backend: syncBackend,
                 queue: syncQueue,
@@ -386,7 +408,8 @@ struct ContentView: View {
             let browserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,
                 categoryRepo: categoryRepo,
-                documentRepo: documentRepo
+                documentRepo: documentRepo,
+                sessionRepo: sessionRepo
             )
             browserVM.syncManager = syncMgr
             self.projectBrowserVM = browserVM
@@ -425,6 +448,7 @@ struct ContentView: View {
                 categoryRepo: categoryRepo
             )
             quickCaptureVM.syncManager = syncMgr
+            quickCaptureVM.codebaseRepo = codebaseRepo
             self.quickCaptureVM = quickCaptureVM
 
             self.crossProjectRoadmapVM = CrossProjectRoadmapViewModel(

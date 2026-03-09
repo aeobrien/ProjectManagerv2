@@ -46,7 +46,10 @@ public struct ChatView: View {
                 }
             }
             .labelsHidden()
+            #if os(macOS)
             .frame(maxWidth: 200)
+            #endif
+            .pickerStyle(.menu)
 
             // Conversation type
             Picker("Mode", selection: $viewModel.conversationType) {
@@ -56,7 +59,10 @@ public struct ChatView: View {
                 Text("Review").tag(ConversationType.review)
             }
             .labelsHidden()
+            #if os(macOS)
             .frame(maxWidth: 150)
+            #endif
+            .pickerStyle(.menu)
 
             Spacer()
 
@@ -144,7 +150,11 @@ public struct ChatView: View {
             }
         }
         .padding()
+        #if os(iOS)
+        .frame(maxWidth: 350)
+        #else
         .frame(width: 320)
+        #endif
     }
 
     private func capabilityRow(_ action: String, description: String) -> some View {
@@ -203,7 +213,11 @@ public struct ChatView: View {
             }
         }
         .padding()
+        #if os(iOS)
+        .frame(maxWidth: 350)
+        #else
         .frame(width: 320)
+        #endif
         .task { await viewModel.loadConversations() }
     }
 
@@ -424,7 +438,11 @@ struct MessageBubble: View {
 
     var body: some View {
         HStack {
+            #if os(iOS)
+            if message.role == .user { Spacer(minLength: 20) }
+            #else
             if message.role == .user { Spacer(minLength: 60) }
+            #endif
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
                 messageText
@@ -440,7 +458,11 @@ struct MessageBubble: View {
                     .foregroundStyle(.secondary)
             }
 
+            #if os(iOS)
+            if message.role != .user { Spacer(minLength: 20) }
+            #else
             if message.role != .user { Spacer(minLength: 60) }
+            #endif
         }
     }
 

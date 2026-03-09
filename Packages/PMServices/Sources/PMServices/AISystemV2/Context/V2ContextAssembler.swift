@@ -14,7 +14,7 @@ public struct V2ContextAssembler: Sendable {
     /// Reserved tokens for the AI response.
     public let responseReserve: Int
 
-    public init(totalBudget: Int = 20000, responseReserve: Int = 2500) {
+    public init(totalBudget: Int = 100000, responseReserve: Int = 4000) {
         self.totalBudget = totalBudget
         self.responseReserve = responseReserve
     }
@@ -35,12 +35,14 @@ public struct V2ContextAssembler: Sendable {
         public let subtasksByTaskId: [UUID: [Subtask]]
         public let processProfile: ProcessProfile?
         public let deliverables: [Deliverable]
+        public let documents: [Document]
         public let sessions: [Session]
         public let sessionSummaries: [SessionSummary]
         public let frequentlyDeferredTasks: [PMTask]
         public let estimateAccuracy: Float?
         public let suggestedMultiplier: Float?
         public let accuracyTrend: (older: Float, newer: Float)?
+        public let codebaseContext: String?
 
         public init(
             project: Project,
@@ -50,12 +52,14 @@ public struct V2ContextAssembler: Sendable {
             subtasksByTaskId: [UUID: [Subtask]] = [:],
             processProfile: ProcessProfile? = nil,
             deliverables: [Deliverable] = [],
+            documents: [Document] = [],
             sessions: [Session] = [],
             sessionSummaries: [SessionSummary] = [],
             frequentlyDeferredTasks: [PMTask] = [],
             estimateAccuracy: Float? = nil,
             suggestedMultiplier: Float? = nil,
-            accuracyTrend: (older: Float, newer: Float)? = nil
+            accuracyTrend: (older: Float, newer: Float)? = nil,
+            codebaseContext: String? = nil
         ) {
             self.project = project
             self.phases = phases
@@ -64,12 +68,14 @@ public struct V2ContextAssembler: Sendable {
             self.subtasksByTaskId = subtasksByTaskId
             self.processProfile = processProfile
             self.deliverables = deliverables
+            self.documents = documents
             self.sessions = sessions
             self.sessionSummaries = sessionSummaries
             self.frequentlyDeferredTasks = frequentlyDeferredTasks
             self.estimateAccuracy = estimateAccuracy
             self.suggestedMultiplier = suggestedMultiplier
             self.accuracyTrend = accuracyTrend
+            self.codebaseContext = codebaseContext
         }
     }
 
@@ -110,6 +116,16 @@ public struct V2ContextAssembler: Sendable {
         projectData: ProjectData,
         portfolioData: PortfolioData? = nil
     ) -> String {
+        assembleLayer3WithInfo(mode: mode, subMode: subMode, projectData: projectData, portfolioData: portfolioData).content
+    }
+
+    /// Internal assembly that also returns truncation metadata.
+    private func assembleLayer3WithInfo(
+        mode: SessionMode,
+        subMode: SessionSubMode? = nil,
+        projectData: ProjectData,
+        portfolioData: PortfolioData? = nil
+    ) -> Layer3Result {
         let config = V2ContextConfiguration.configuration(for: mode, subMode: subMode)
         let patterns = CrossSessionPatterns.compute(
             sessions: projectData.sessions,
@@ -148,7 +164,7 @@ public struct V2ContextAssembler: Sendable {
         portfolioData: PortfolioData? = nil,
         conversationHistory: [LLMMessage] = []
     ) -> ContextPayload {
-        let layer3 = assembleLayer3(
+        let layer3Result = assembleLayer3WithInfo(
             mode: mode,
             subMode: subMode,
             projectData: projectData,
@@ -156,10 +172,10 @@ public struct V2ContextAssembler: Sendable {
         )
 
         let fullSystemPrompt: String
-        if layer3.isEmpty {
+        if layer3Result.content.isEmpty {
             fullSystemPrompt = systemPrompt
         } else {
-            fullSystemPrompt = systemPrompt + "\n\n---\n\n" + layer3
+            fullSystemPrompt = systemPrompt + "\n\n---\n\n" + layer3Result.content
         }
 
         var messages: [LLMMessage] = []
@@ -177,7 +193,9 @@ public struct V2ContextAssembler: Sendable {
             historyMessages.insert(message, at: 0)
         }
 
-        if historyMessages.count < conversationHistory.count && !conversationHistory.isEmpty {
+        let droppedHistoryCount = conversationHistory.count - historyMessages.count
+
+        if droppedHistoryCount > 0 && !conversationHistory.isEmpty {
             messages.append(LLMMessage(
                 role: .system,
                 content: "[Earlier conversation history was truncated to fit within token budget]"
@@ -188,16 +206,26 @@ public struct V2ContextAssembler: Sendable {
 
         let totalTokens = messages.reduce(0) { $0 + Self.estimateTokens($1.content) }
 
+        let truncationInfo = ContextTruncationInfo(
+            droppedSections: layer3Result.droppedSections,
+            truncatedSections: layer3Result.truncatedSections,
+            droppedHistoryMessages: droppedHistoryCount,
+            layer3Budget: layer3Result.budget,
+            layer3TokensBeforeTruncation: layer3Result.tokensBeforeTruncation
+        )
+
         return ContextPayload(
             systemPrompt: fullSystemPrompt,
             messages: messages,
-            estimatedTokens: totalTokens
+            estimatedTokens: totalTokens,
+            truncationInfo: truncationInfo
         )
     }
 
     // MARK: - Component Rendering
 
     private struct PrioritisedSection {
+        let label: String
         let priority: Int
         let content: String
         var tokens: Int { Self.estimateTokens(content) }
@@ -205,6 +233,15 @@ public struct V2ContextAssembler: Sendable {
         private static func estimateTokens(_ text: String) -> Int {
             V2ContextAssembler.estimateTokens(text)
         }
+    }
+
+    /// Internal result of Layer 3 assembly with truncation metadata.
+    private struct Layer3Result {
+        let content: String
+        let droppedSections: [String]
+        let truncatedSections: [String]
+        let budget: Int
+        let tokensBeforeTruncation: Int
     }
 
     private func renderComponent(
@@ -222,7 +259,7 @@ public struct V2ContextAssembler: Sendable {
         case .processProfile:
             content = formatProcessProfile(projectData.processProfile)
         case .documents:
-            content = formatDocuments(projectData.deliverables)
+            content = formatDocuments(deliverables: projectData.deliverables, documents: projectData.documents)
         case .sessionSummaries:
             content = formatSessionSummaries(
                 projectData.sessionSummaries,
@@ -245,32 +282,76 @@ public struct V2ContextAssembler: Sendable {
             content = nil // Populated externally by the ConversationManager
         case .portfolioSummary:
             content = formatPortfolio(portfolioData)
+        case .codebaseContext:
+            if let ctx = projectData.codebaseContext, !ctx.isEmpty {
+                content = "RELEVANT CODE:\n\n\(ctx)"
+                Log.ai.info("Including codebase context: \(ctx.count) chars")
+            } else {
+                content = nil
+                Log.ai.debug("No codebase context available for assembly")
+            }
         }
 
         guard let content, !content.isEmpty else { return nil }
-        return PrioritisedSection(priority: component.priority, content: content)
+        return PrioritisedSection(label: component.kind.rawValue, priority: component.priority, content: content)
     }
 
     // MARK: - Token Budget
 
-    private func applyTokenBudget(sections: [PrioritisedSection], budget: Int) -> String {
-        var totalTokens = sections.reduce(0) { $0 + $1.tokens }
+    private func applyTokenBudget(sections: [PrioritisedSection], budget: Int) -> Layer3Result {
+        let tokensBeforeTruncation = sections.reduce(0) { $0 + $1.tokens }
+        var totalTokens = tokensBeforeTruncation
 
         if totalTokens <= budget {
-            return sections.map(\.content).joined(separator: "\n\n")
+            return Layer3Result(
+                content: sections.map(\.content).joined(separator: "\n\n"),
+                droppedSections: [],
+                truncatedSections: [],
+                budget: budget,
+                tokensBeforeTruncation: tokensBeforeTruncation
+            )
         }
 
-        // Truncate from lowest priority (highest number) until within budget
+        // Phase 1: Drop entire sections from lowest priority (highest number) until within budget
         var includedSections = sections
-        while totalTokens > budget && !includedSections.isEmpty {
+        var droppedSections: [String] = []
+        while totalTokens > budget && includedSections.count > 1 {
             // Find the lowest-priority section (highest priority number)
             if let maxIdx = includedSections.indices.max(by: { includedSections[$0].priority < includedSections[$1].priority }) {
-                totalTokens -= includedSections[maxIdx].tokens
+                let dropped = includedSections[maxIdx]
+                Log.ai.info("Context budget: dropping '\(dropped.label)' (priority \(dropped.priority), \(dropped.tokens) tokens) — \(totalTokens)/\(budget) tokens")
+                droppedSections.append(dropped.label)
+                totalTokens -= dropped.tokens
                 includedSections.remove(at: maxIdx)
             }
         }
 
-        return includedSections.map(\.content).joined(separator: "\n\n")
+        // Phase 2: If a single section still exceeds budget, truncate its content rather than dropping it
+        var truncatedSections: [String] = []
+        if totalTokens > budget, includedSections.count == 1 {
+            truncatedSections.append(includedSections[0].label)
+            let maxChars = Int(Double(budget) / Self.tokensPerChar)
+            let original = includedSections[0].content
+            let truncated = String(original.prefix(maxChars))
+            // Try to break at a newline to avoid cutting mid-line
+            let breakPoint = truncated.range(of: "\n", options: .backwards)?.lowerBound
+                ?? truncated.endIndex
+            let cleanTruncated = String(truncated[truncated.startIndex..<breakPoint])
+            let trimmedChars = original.count - cleanTruncated.count
+            includedSections[0] = PrioritisedSection(
+                label: includedSections[0].label,
+                priority: includedSections[0].priority,
+                content: cleanTruncated + "\n[... truncated, \(trimmedChars) chars omitted to fit context budget]"
+            )
+        }
+
+        return Layer3Result(
+            content: includedSections.map(\.content).joined(separator: "\n\n"),
+            droppedSections: droppedSections,
+            truncatedSections: truncatedSections,
+            budget: budget,
+            tokensBeforeTruncation: tokensBeforeTruncation
+        )
     }
 
     // MARK: - Formatters
@@ -322,16 +403,34 @@ public struct V2ContextAssembler: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    private func formatDocuments(_ deliverables: [Deliverable]) -> String? {
-        let completed = deliverables.filter { $0.status == .completed || $0.status == .revised }
-        guard !completed.isEmpty else { return nil }
+    private func formatDocuments(deliverables: [Deliverable], documents: [Document]) -> String? {
+        let completedDeliverables = deliverables.filter { $0.status == .completed || $0.status == .revised }
+        let nonEmptyDocuments = documents.filter { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        guard !completedDeliverables.isEmpty || !nonEmptyDocuments.isEmpty else { return nil }
 
         var lines: [String] = ["DOCUMENTS:"]
-        for doc in completed {
+
+        // Research/reference documents first — these provide input context.
+        // High char limit: users add these specifically to inform AI sessions.
+        for doc in nonEmptyDocuments {
             lines.append("")
             lines.append("[\(doc.type.rawValue): \(doc.title)]")
-            // Include content, but truncate very long documents
-            let maxChars = 2000
+            let maxChars = 25000
+            if doc.content.count > maxChars {
+                let truncated = String(doc.content.prefix(maxChars))
+                lines.append(truncated)
+                lines.append("[... truncated, \(doc.content.count) chars total]")
+            } else {
+                lines.append(doc.content)
+            }
+        }
+
+        // Deliverables (AI-produced artifacts)
+        for doc in completedDeliverables {
+            lines.append("")
+            lines.append("[\(doc.type.rawValue): \(doc.title)]")
+            let maxChars = 8000
             if doc.content.count > maxChars {
                 let truncated = String(doc.content.prefix(maxChars))
                 lines.append(truncated)

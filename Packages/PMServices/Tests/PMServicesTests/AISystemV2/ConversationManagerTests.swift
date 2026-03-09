@@ -333,7 +333,7 @@ struct ConversationManagerTests {
         _ = try await mgr.sendMessage("How's it going?", sessionId: session.id, projectData: makeProjectData())
 
         let systemPrompt = mockLLM.lastSystemPrompt!
-        #expect(systemPrompt.contains("checkIn"))
+        #expect(systemPrompt.contains("Check-in"))
     }
 
     // MARK: - ConversationConfig

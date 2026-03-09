@@ -27,7 +27,7 @@ public final class ProjectBrowserViewModel {
         didSet { Task { await applyFilters() } }
     }
 
-    public var sortOrder: SortOrder = .recentlyUpdated {
+    public var sortOrder: SortOrder = .name {
         didSet { applySort() }
     }
 
@@ -47,12 +47,17 @@ public final class ProjectBrowserViewModel {
     public var pauseReason: String = ""
     public var abandonmentReflection: String = ""
 
+    // MARK: - AI Onboarding Progress
+
+    public private(set) var completedModes: [UUID: Set<SessionMode>] = [:]
+
     // MARK: - Dependencies
 
     private let projectRepo: ProjectRepositoryProtocol
     private let categoryRepo: CategoryRepositoryProtocol
     private let taskRepo: TaskRepositoryProtocol?
     private let documentRepo: DocumentRepositoryProtocol?
+    private let sessionRepo: SessionRepositoryProtocol?
 
     /// Optional sync manager for tracking project changes.
     public var syncManager: SyncManager?
@@ -63,12 +68,14 @@ public final class ProjectBrowserViewModel {
         projectRepo: ProjectRepositoryProtocol,
         categoryRepo: CategoryRepositoryProtocol,
         taskRepo: TaskRepositoryProtocol? = nil,
-        documentRepo: DocumentRepositoryProtocol? = nil
+        documentRepo: DocumentRepositoryProtocol? = nil,
+        sessionRepo: SessionRepositoryProtocol? = nil
     ) {
         self.projectRepo = projectRepo
         self.categoryRepo = categoryRepo
         self.taskRepo = taskRepo
         self.documentRepo = documentRepo
+        self.sessionRepo = sessionRepo
     }
 
     // MARK: - Loading
@@ -80,6 +87,7 @@ public final class ProjectBrowserViewModel {
             projects = try await projectRepo.fetchAll()
             categories = try await categoryRepo.fetchAll()
             await applyFilters()
+            await loadCompletedModes()
             Log.ui.info("Loaded \(self.projects.count) projects, \(self.categories.count) categories")
         } catch {
             self.error = error.localizedDescription
@@ -255,6 +263,23 @@ public final class ProjectBrowserViewModel {
     /// Returns valid lifecycle transitions for a given project.
     public func validTransitions(for project: Project) -> Set<LifecycleState> {
         Validation.validTransitions(from: project.lifecycleState)
+    }
+
+    // MARK: - AI Onboarding Progress
+
+    private func loadCompletedModes() async {
+        guard let sessionRepo else { return }
+        var result: [UUID: Set<SessionMode>] = [:]
+        for project in projects {
+            let sessions = (try? await sessionRepo.fetchAll(forProject: project.id)) ?? []
+            let modes = Set(sessions
+                .filter { $0.status == .completed || $0.status == .autoSummarised }
+                .map(\.mode))
+            if !modes.isEmpty {
+                result[project.id] = modes
+            }
+        }
+        completedModes = result
     }
 
     // MARK: - Helpers

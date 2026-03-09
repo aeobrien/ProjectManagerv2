@@ -82,8 +82,15 @@ public final class SyncManager {
         stopPeriodicSync()
         guard syncEnabled else { return }
 
-        // Initial sync on start
-        Task { await syncNow() }
+        // Enqueue all existing entities if the queue is empty (first sync or migration)
+        Task {
+            do {
+                try await syncEngine.enqueueAllExistingEntities()
+            } catch {
+                Log.sync.error("Failed to enqueue existing entities: \(error)")
+            }
+            await syncNow()
+        }
 
         syncTimer = Timer.scheduledTimer(withTimeInterval: syncIntervalSeconds, repeats: true) { [weak self] _ in
             guard let self else { return }

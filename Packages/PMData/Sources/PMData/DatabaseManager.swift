@@ -287,6 +287,117 @@ public final class DatabaseManager: Sendable {
                           columns: ["projectId", "type"])
         }
 
+        migrator.registerMigration("v6-codebase") { db in
+            try db.create(table: "codebase") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("projectId", .text).notNull()
+                    .references("project", onDelete: .cascade)
+                t.column("name", .text).notNull()
+                t.column("sourceType", .text).notNull()
+                t.column("localPath", .text)
+                t.column("githubURL", .text)
+                t.column("bookmarkData", .blob)
+                t.column("clonedPath", .text)
+                t.column("lastIndexedAt", .datetime)
+                t.column("fileSizeLimitMB", .integer).notNull().defaults(to: 25)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
+
+        migrator.registerMigration("v7-copy-deliverables-to-documents") { _ in
+            // Placeholder — logic moved to v7b after discovering binary UUID + empty doc issues.
+        }
+
+        migrator.registerMigration("v7b-copy-deliverables-to-documents") { db in
+            // Copy completed/revised deliverables into the document table.
+            // If an empty document of the matching type exists, update it in place.
+            // Otherwise create a new document.
+            let deliverableRows = try Row.fetchAll(db, sql: """
+                SELECT projectId, type, title, content, createdAt, updatedAt
+                FROM deliverable
+                WHERE status IN ('completed', 'revised')
+                  AND content != ''
+                """)
+
+            for row in deliverableRows {
+                let rawType: String = row["type"]
+                let projectIdValue: DatabaseValue = row["projectId"]
+                let title: String = row["title"]
+                let content: String = row["content"]
+                let createdAt: Date = row["createdAt"]
+                let updatedAt: Date = row["updatedAt"]
+
+                // Map DeliverableType → DocumentType
+                let docType: String
+                switch rawType {
+                case "visionStatement": docType = "visionStatement"
+                case "technicalBrief": docType = "technicalBrief"
+                default: docType = "other"
+                }
+
+                // For visionStatement/technicalBrief: check by type (one per project).
+                // For "other": check by title to avoid colliding with unrelated docs.
+                let existingDoc: Row?
+                if docType != "other" {
+                    existingDoc = try Row.fetchOne(db, sql: """
+                        SELECT id, content FROM document
+                        WHERE projectId = ? AND type = ?
+                        """, arguments: [projectIdValue, docType])
+                } else {
+                    existingDoc = try Row.fetchOne(db, sql: """
+                        SELECT id, content FROM document
+                        WHERE projectId = ? AND title = ?
+                        """, arguments: [projectIdValue, title])
+                }
+
+                if let existing = existingDoc {
+                    let existingContent: String = existing["content"]
+                    if existingContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        // Update the empty document with the deliverable content
+                        let existingId: DatabaseValue = existing["id"]
+                        try db.execute(sql: """
+                            UPDATE document SET content = ?, title = ?, updatedAt = ?, version = 1
+                            WHERE id = ?
+                            """, arguments: [content, title, updatedAt, existingId])
+                    }
+                    // If existing doc already has content, leave it alone
+                } else {
+                    // Create a new document
+                    let docId = UUID()
+                    // Use the deliverable's display name for a nicer title
+                    let displayTitle: String
+                    switch rawType {
+                    case "visionStatement": displayTitle = "Vision Statement"
+                    case "technicalBrief": displayTitle = "Technical Brief"
+                    case "researchPlan": displayTitle = "Research Plan"
+                    case "creativeBrief": displayTitle = "Creative Brief"
+                    case "setupSpecification": displayTitle = "Setup Specification"
+                    default: displayTitle = title
+                    }
+
+                    try db.execute(sql: """
+                        INSERT INTO document (id, projectId, type, title, content, createdAt, updatedAt, version)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                        """, arguments: [docId, projectIdValue, docType, displayTitle, content, createdAt, updatedAt])
+                }
+            }
+        }
+
+        migrator.registerMigration("v8-syncQueue") { db in
+            try db.create(table: "syncChange") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("entityType", .text).notNull()
+                t.column("entityId", .text).notNull()
+                t.column("changeType", .text).notNull()
+                t.column("timestamp", .datetime).notNull()
+                t.column("synced", .boolean).notNull().defaults(to: false)
+            }
+            try db.create(index: "syncChange_pending",
+                          on: "syncChange",
+                          columns: ["synced", "timestamp"])
+        }
+
         try migrator.migrate(dbQueue)
     }
 

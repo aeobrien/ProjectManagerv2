@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import PMUtilities
 
 /// Observable settings store backed by UserDefaults.
 /// All configurable values from the technical brief section 16.1.
@@ -15,6 +16,7 @@ public final class SettingsManager {
         self.defaults = defaults
         registerDefaults()
         loadFromDefaults()
+        observeCloudKeyValueChanges()
     }
 
     private func registerDefaults() {
@@ -29,10 +31,9 @@ public final class SettingsManager {
             Keys.pessimismMultiplier: 1.5,
             Keys.deferredThreshold: 3,
             Keys.whisperModel: "small",
-            Keys.aiModel: "",
+            Keys.aiModel: "claude-opus-4-6",
             Keys.aiTrustLevel: "confirmAll",
             Keys.aiProvider: "anthropic",
-            Keys.aiApiKey: "",
             Keys.notificationsEnabled: true,
             Keys.maxDailyNotifications: 2,
             Keys.quietHoursStart: 21,
@@ -45,11 +46,10 @@ public final class SettingsManager {
             Keys.lifePlannerSyncEnabled: false,
             Keys.lifePlannerSyncMethod: "mysql",
             Keys.lifePlannerAPIEndpoint: "",
-            Keys.lifePlannerAPIKey: "",
             Keys.lifePlannerFilePath: "",
             Keys.integrationAPIEnabled: false,
             Keys.integrationAPIPort: 8420,
-            Keys.integrationAPIKey: "",
+            Keys.defaultCodebaseSizeLimitMB: 25,
             Keys.returnBriefingThresholdDays: 14,
             Keys.doneColumnRetentionDays: 7,
             Keys.doneColumnMaxItems: 20,
@@ -70,10 +70,10 @@ public final class SettingsManager {
         deferredThreshold = defaults.integer(forKey: Keys.deferredThreshold).clamped(to: 1...10)
         pessimismMultiplier = defaults.double(forKey: Keys.pessimismMultiplier).clamped(to: 1.0...3.0)
         whisperModel = defaults.string(forKey: Keys.whisperModel) ?? "small"
-        aiModel = defaults.string(forKey: Keys.aiModel) ?? ""
+        aiModel = defaults.string(forKey: Keys.aiModel) ?? "claude-opus-4-6"
         aiTrustLevel = defaults.string(forKey: Keys.aiTrustLevel) ?? "confirmAll"
         aiProvider = defaults.string(forKey: Keys.aiProvider) ?? "anthropic"
-        aiApiKey = defaults.string(forKey: Keys.aiApiKey) ?? ""
+        aiApiKey = loadSecretKey(Keys.aiApiKey, syncFromCloud: true)
         notificationsEnabled = defaults.bool(forKey: Keys.notificationsEnabled)
         maxDailyNotifications = defaults.integer(forKey: Keys.maxDailyNotifications).clamped(to: 1...5)
         quietHoursStart = defaults.integer(forKey: Keys.quietHoursStart).clamped(to: 0...23)
@@ -86,11 +86,12 @@ public final class SettingsManager {
         lifePlannerSyncEnabled = defaults.bool(forKey: Keys.lifePlannerSyncEnabled)
         lifePlannerSyncMethod = defaults.string(forKey: Keys.lifePlannerSyncMethod) ?? "mysql"
         lifePlannerAPIEndpoint = defaults.string(forKey: Keys.lifePlannerAPIEndpoint) ?? ""
-        lifePlannerAPIKey = defaults.string(forKey: Keys.lifePlannerAPIKey) ?? ""
+        lifePlannerAPIKey = loadSecretKey(Keys.lifePlannerAPIKey)
         lifePlannerFilePath = defaults.string(forKey: Keys.lifePlannerFilePath) ?? ""
         integrationAPIEnabled = defaults.bool(forKey: Keys.integrationAPIEnabled)
         integrationAPIPort = defaults.integer(forKey: Keys.integrationAPIPort).clamped(to: 1024...65535)
-        integrationAPIKey = defaults.string(forKey: Keys.integrationAPIKey) ?? ""
+        integrationAPIKey = loadSecretKey(Keys.integrationAPIKey)
+        defaultCodebaseSizeLimitMB = defaults.integer(forKey: Keys.defaultCodebaseSizeLimitMB).clamped(to: 5...200)
     }
 
     // MARK: - Focus Board
@@ -155,7 +156,7 @@ public final class SettingsManager {
 
     // MARK: - AI
 
-    public var aiModel: String = "" {
+    public var aiModel: String = "claude-opus-4-6" {
         didSet { defaults.set(aiModel, forKey: Keys.aiModel) }
     }
 
@@ -168,7 +169,13 @@ public final class SettingsManager {
     }
 
     public var aiApiKey: String = "" {
-        didSet { defaults.set(aiApiKey, forKey: Keys.aiApiKey) }
+        didSet {
+            KeychainHelper.save(key: Keys.aiApiKey, value: aiApiKey)
+            // Sync AI API key to iCloud KV store for cross-device access
+            let kvStore = NSUbiquitousKeyValueStore.default
+            kvStore.set(aiApiKey, forKey: Keys.aiApiKey)
+            kvStore.synchronize()
+        }
     }
 
     // MARK: - Notifications
@@ -226,7 +233,7 @@ public final class SettingsManager {
     }
 
     public var lifePlannerAPIKey: String = "" {
-        didSet { defaults.set(lifePlannerAPIKey, forKey: Keys.lifePlannerAPIKey) }
+        didSet { KeychainHelper.save(key: Keys.lifePlannerAPIKey, value: lifePlannerAPIKey) }
     }
 
     public var lifePlannerFilePath: String = "" {
@@ -244,7 +251,64 @@ public final class SettingsManager {
     }
 
     public var integrationAPIKey: String = "" {
-        didSet { defaults.set(integrationAPIKey, forKey: Keys.integrationAPIKey) }
+        didSet { KeychainHelper.save(key: Keys.integrationAPIKey, value: integrationAPIKey) }
+    }
+
+    // MARK: - Codebase
+
+    public var defaultCodebaseSizeLimitMB: Int = 25 {
+        didSet { defaults.set(defaultCodebaseSizeLimitMB.clamped(to: 5...200), forKey: Keys.defaultCodebaseSizeLimitMB) }
+    }
+
+    // MARK: - Secret Key Helpers
+
+    /// Load a secret key from Keychain, falling back to iCloud KV store (if `syncFromCloud`),
+    /// then UserDefaults (migration). Migrated values are moved to Keychain and removed from UserDefaults.
+    private func loadSecretKey(_ key: String, syncFromCloud: Bool = false) -> String {
+        // 1. Try Keychain
+        if let value = KeychainHelper.load(key: key), !value.isEmpty {
+            return value
+        }
+
+        // 2. Try iCloud KV store (only for aiApiKey)
+        if syncFromCloud {
+            let kvStore = NSUbiquitousKeyValueStore.default
+            kvStore.synchronize()
+            if let cloudValue = kvStore.string(forKey: key), !cloudValue.isEmpty {
+                KeychainHelper.save(key: key, value: cloudValue)
+                return cloudValue
+            }
+        }
+
+        // 3. Migrate from UserDefaults
+        if let legacyValue = defaults.string(forKey: key), !legacyValue.isEmpty {
+            KeychainHelper.save(key: key, value: legacyValue)
+            defaults.removeObject(forKey: key)
+            return legacyValue
+        }
+
+        return ""
+    }
+
+    /// Observe iCloud KV store changes to pick up aiApiKey updates from other devices.
+    private func observeCloudKeyValueChanges() {
+        NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default,
+            queue: .main
+        ) { [weak self] notification in
+            guard let changedKeys = notification.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] else { return }
+            if changedKeys.contains(Keys.aiApiKey) {
+                if let cloudValue = NSUbiquitousKeyValueStore.default.string(forKey: Keys.aiApiKey), !cloudValue.isEmpty {
+                    KeychainHelper.save(key: Keys.aiApiKey, value: cloudValue)
+                    MainActor.assumeIsolated {
+                        self?.aiApiKey = cloudValue
+                    }
+                }
+            }
+        }
+        // Trigger initial sync
+        NSUbiquitousKeyValueStore.default.synchronize()
     }
 }
 
@@ -282,6 +346,7 @@ private enum Keys {
     static let integrationAPIEnabled = "settings.integrationAPIEnabled"
     static let integrationAPIPort = "settings.integrationAPIPort"
     static let integrationAPIKey = "settings.integrationAPIKey"
+    static let defaultCodebaseSizeLimitMB = "settings.defaultCodebaseSizeLimitMB"
     static let returnBriefingThresholdDays = "settings.returnBriefingThresholdDays"
     static let doneColumnRetentionDays = "settings.doneColumnRetentionDays"
     static let doneColumnMaxItems = "settings.doneColumnMaxItems"

@@ -59,6 +59,48 @@ struct V2ContextConfigurationTests {
         let hasDocs = config.components.contains { $0.kind == .documents }
         #expect(hasDocs)
     }
+
+    @Test("Planning includes frequently deferred and estimate calibration")
+    func planningHasDeferredAndEstimates() {
+        let config = V2ContextConfiguration.configuration(for: .planning)
+        let hasDeferred = config.components.contains { $0.kind == .frequentlyDeferred }
+        let hasEstimate = config.components.contains { $0.kind == .estimateCalibration }
+        #expect(hasDeferred)
+        #expect(hasEstimate)
+    }
+
+    @Test("Project review has adequate token budget")
+    func projectReviewBudget() {
+        let config = V2ContextConfiguration.configuration(for: .executionSupport, subMode: .projectReview)
+        #expect(config.tokenBudget >= 20000, "Project review needs enough budget for cross-project analysis")
+    }
+
+    @Test("Return briefing has distinct config from check-in")
+    func returnBriefingDistinct() {
+        let checkIn = V2ContextConfiguration.configuration(for: .executionSupport, subMode: .checkIn)
+        let returnBriefing = V2ContextConfiguration.configuration(for: .executionSupport, subMode: .returnBriefing)
+        // Return briefing should prioritise project structure for re-orientation
+        let returnStructurePriority = returnBriefing.components.first { $0.kind == .projectStructure }?.priority
+        let checkInStructurePriority = checkIn.components.first { $0.kind == .projectStructure }?.priority
+        #expect(returnStructurePriority != nil)
+        #expect(checkInStructurePriority != nil)
+        // Return briefing gives project structure higher priority
+        #expect(returnStructurePriority! <= checkInStructurePriority!)
+    }
+
+    @Test("Check-in includes process profile at priority 1")
+    func checkInProcessProfilePriority() {
+        let config = V2ContextConfiguration.configuration(for: .executionSupport, subMode: .checkIn)
+        let profile = config.components.first { $0.kind == .processProfile }
+        #expect(profile != nil)
+        #expect(profile?.priority == 1)
+    }
+
+    @Test("Return briefing has more full summaries for context")
+    func returnBriefingFullSummaries() {
+        let config = V2ContextConfiguration.configuration(for: .executionSupport, subMode: .returnBriefing)
+        #expect(config.fullSummaryCount >= 3, "Return briefing needs sufficient session history for re-orientation")
+    }
 }
 
 // MARK: - CrossSessionPatterns Tests
@@ -397,8 +439,8 @@ struct V2ContextAssemblerTests {
 
     @Test("Token budget truncates low-priority sections")
     func tokenBudgetTruncation() {
-        // Create a very large document that exceeds the exploration budget
-        let longContent = String(repeating: "x", count: 10000)
+        // Create a very large document that exceeds the exploration budget (28000 tokens ≈ 93333 chars)
+        let longContent = String(repeating: "x", count: 120000)
         let deliverable = Deliverable(
             projectId: projectId,
             type: .visionStatement,
@@ -408,10 +450,9 @@ struct V2ContextAssemblerTests {
         )
         let data = makeProjectData(deliverables: [deliverable])
         let context = assembler.assembleLayer3(mode: .exploration, projectData: data)
-        // Exploration budget is 2000 tokens (~6666 chars). With project overview + long doc,
-        // the doc (lower priority) should get truncated out entirely
+        let budget = V2ContextConfiguration.configuration(for: .exploration).tokenBudget
         let tokens = V2ContextAssembler.estimateTokens(context)
-        #expect(tokens <= 2000, "Context should be within token budget, got \(tokens)")
+        #expect(tokens <= budget, "Context should be within token budget (\(budget)), got \(tokens)")
     }
 
     @Test("Empty project data produces minimal context")
@@ -469,7 +510,8 @@ struct V2ContextAssemblerTests {
 
     @Test("Long documents are truncated in context")
     func longDocumentTruncation() {
-        let longContent = String(repeating: "a", count: 5000)
+        // Deliverables are truncated at 8000 chars, so use content exceeding that
+        let longContent = String(repeating: "a", count: 12000)
         let deliverable = Deliverable(
             projectId: projectId,
             type: .visionStatement,
@@ -478,12 +520,11 @@ struct V2ContextAssemblerTests {
             content: longContent
         )
         let data = makeProjectData(deliverables: [deliverable])
-        // Use planning mode which has a higher budget so the doc section isn't dropped entirely
-        let bigAssembler = V2ContextAssembler(totalBudget: 50000)
+        let bigAssembler = V2ContextAssembler(totalBudget: 200000)
         let context = bigAssembler.assembleLayer3(mode: .planning, projectData: data)
         if context.contains("DOCUMENTS:") {
             #expect(context.contains("truncated"))
-            #expect(context.contains("5000 chars total"))
+            #expect(context.contains("12000 chars total"))
         }
     }
 }

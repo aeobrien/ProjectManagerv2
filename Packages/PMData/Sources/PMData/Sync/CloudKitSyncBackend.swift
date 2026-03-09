@@ -33,10 +33,24 @@ public final class CloudKitSyncBackend: SyncBackendProtocol, @unchecked Sendable
     // MARK: - SyncBackendProtocol
 
     public func push(changes: [SyncChange], payloads: [UUID: Data]) async throws {
+        // Deduplicate: keep only the latest change per entity to avoid
+        // "you can't save the same record more than once" CloudKit error.
+        var latestByEntity: [UUID: SyncChange] = [:]
+        for change in changes {
+            if let existing = latestByEntity[change.entityId] {
+                // Keep whichever is newer; if a delete follows a create/update, the delete wins
+                if change.changeType == .delete || change.timestamp >= existing.timestamp {
+                    latestByEntity[change.entityId] = change
+                }
+            } else {
+                latestByEntity[change.entityId] = change
+            }
+        }
+
         var recordsToSave: [CKRecord] = []
         var recordIDsToDelete: [CKRecord.ID] = []
 
-        for change in changes {
+        for change in latestByEntity.values {
             let recordID = CKRecord.ID(recordName: change.entityId.uuidString, zoneID: zoneID)
 
             switch change.changeType {

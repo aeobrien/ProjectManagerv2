@@ -600,6 +600,8 @@ Protocols live in **Domain**. Concrete implementations live in **Data** or **Ser
 - If SwiftData was chosen in Phase 2, leverage NSPersistentCloudKitContainer. If GRDB, build custom sync layer.
 - How to handle the knowledge base vector store across devices (likely: rebuild per-device rather than sync)
 
+> **Priority note:** CloudKit sync is an important future item. Until this phase is implemented, the Data Backup feature (Settings > Data Backup) provides an interim safety net for full export/import of all project data.
+
 ---
 
 ## Phase 20: iOS App
@@ -911,3 +913,12 @@ These are enhancements that don't block testing.
 **What:** Roadmap view has a "View Retrospective Notes" context menu item on completed phases but the action is empty.
 **Where:** `PMFeatures/ProjectDetail/RoadmapView.swift`
 **Scope:** Wire the context menu action to open a sheet displaying the phase's `retrospectiveNotes`.
+
+#### 28.9 Cross-Project Linking
+**What:** Allow users to create explicit links between related projects. For example, a hardware device project and an event project could be linked if the device is being built for use at the event. Linked projects could be viewed side-by-side, and their combined context could be provided to the AI during sessions for either project.
+**Where:** Domain model (new `ProjectLink` entity), UI (project detail, AI context assembly)
+**Scope:** Not yet fully defined — initial considerations include:
+- A many-to-many linking model with optional relationship labels (e.g. "depends on", "used at", "related to")
+- Side-by-side or combined view of linked projects
+- AI context assembly optionally pulling in linked project data for richer cross-project awareness
+- Focus Board and planning awareness of linked project dependencies

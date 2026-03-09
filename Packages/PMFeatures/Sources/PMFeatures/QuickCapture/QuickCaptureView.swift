@@ -116,10 +116,15 @@ public struct QuickCaptureView: View {
             // Actions
             HStack {
                 if viewModel.didSave {
+                    if viewModel.codebaseRepo != nil {
+                        Button("Attach Codebase") {
+                            viewModel.showCodebaseSheet = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     Spacer()
                     Button("Done") {
                         viewModel.reset()
-                        dismiss()
                     }
                     .buttonStyle(.borderedProminent)
                 } else {
@@ -137,6 +142,11 @@ public struct QuickCaptureView: View {
         #if os(macOS)
         .frame(width: 400)
         #endif
+        .sheet(isPresented: $viewModel.showCodebaseSheet) {
+            if let cbRepo = viewModel.codebaseRepo, let projectId = viewModel.lastSavedProjectId {
+                CodebaseAddSheet(projectId: projectId, codebaseRepo: cbRepo)
+            }
+        }
         .task {
             await viewModel.loadCategories()
         }

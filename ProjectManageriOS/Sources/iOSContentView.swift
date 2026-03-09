@@ -43,6 +43,10 @@ struct iOSContentView: View {
     @State private var documentVersionRepo: SQLiteDocumentVersionRepository?
     @State private var checkInRepo: SQLiteCheckInRepository?
     @State private var conversationRepo: SQLiteConversationRepository?
+    @State private var sessionRepo: SQLiteSessionRepository?
+    @State private var processProfileRepo: SQLiteProcessProfileRepository?
+    @State private var deliverableRepo: SQLiteDeliverableRepository?
+    @State private var codebaseRepo: SQLiteCodebaseRepository?
 
     var body: some View {
         Group {
@@ -170,6 +174,44 @@ struct iOSContentView: View {
         }
     }
 
+    private func makeAIDevScreenViewModel() -> AIDevScreenViewModel {
+        guard let sessionRepo, let projectRepo, let phaseRepo, let milestoneRepo,
+              let taskRepo, let subtaskRepo, let checkInRepo, let processProfileRepo,
+              let deliverableRepo, let codebaseRepo else {
+            fatalError("AIDevScreen requires all repos to be initialized")
+        }
+
+        let llmClient = LLMClient()
+        let lifecycleManager = SessionLifecycleManager(repo: sessionRepo)
+        let summaryService = SummaryGenerationService(llmClient: llmClient, repo: sessionRepo)
+        let promptComposer = PromptComposer()
+        let contextAssembler = V2ContextAssembler()
+
+        let conversationManager = ConversationManager(
+            llmClient: llmClient,
+            sessionRepo: sessionRepo,
+            lifecycleManager: lifecycleManager,
+            summaryService: summaryService,
+            promptComposer: promptComposer,
+            contextAssembler: contextAssembler
+        )
+
+        return AIDevScreenViewModel(
+            projectRepo: projectRepo,
+            phaseRepo: phaseRepo,
+            milestoneRepo: milestoneRepo,
+            taskRepo: taskRepo,
+            subtaskRepo: subtaskRepo,
+            checkInRepo: checkInRepo,
+            sessionRepo: sessionRepo,
+            processProfileRepo: processProfileRepo,
+            deliverableRepo: deliverableRepo,
+            conversationManager: conversationManager,
+            documentRepo: documentRepo,
+            codebaseRepo: codebaseRepo
+        )
+    }
+
     @ViewBuilder
     private func makeSettingsView() -> some View {
         #if DEBUG
@@ -177,9 +219,7 @@ struct iOSContentView: View {
             settings: settingsManager,
             exportService: exportService,
             syncManager: syncManager,
-            aiDevScreenViewModelFactory: projectRepo.map { repo in
-                { AIDevScreenViewModel(projectRepo: repo) }
-            }
+            aiDevScreenViewModelFactory: makeAIDevScreenViewModel
         )
         #else
         SettingsView(
@@ -212,6 +252,10 @@ struct iOSContentView: View {
             let documentRepo = SQLiteDocumentRepository(db: db.dbQueue)
             let documentVersionRepo = SQLiteDocumentVersionRepository(db: db.dbQueue)
             let conversationRepo = SQLiteConversationRepository(db: db.dbQueue)
+            let sessionRepo = SQLiteSessionRepository(db: db.dbQueue)
+            let processProfileRepo = SQLiteProcessProfileRepository(db: db.dbQueue)
+            let deliverableRepo = SQLiteDeliverableRepository(db: db.dbQueue)
+            let codebaseRepo = SQLiteCodebaseRepository(db: db.dbQueue)
 
             self.projectRepo = projectRepo
             self.categoryRepo = categoryRepo
@@ -224,6 +268,10 @@ struct iOSContentView: View {
             self.documentRepo = documentRepo
             self.documentVersionRepo = documentVersionRepo
             self.conversationRepo = conversationRepo
+            self.sessionRepo = sessionRepo
+            self.processProfileRepo = processProfileRepo
+            self.deliverableRepo = deliverableRepo
+            self.codebaseRepo = codebaseRepo
 
             var actionExecutor = ActionExecutor(
                 taskRepo: taskRepo,
@@ -240,6 +288,7 @@ struct iOSContentView: View {
             self.knowledgeBaseManager = kbManager
 
             let syncDataProvider = RepositorySyncDataProvider(
+                dbQueue: db.dbQueue,
                 projectRepo: projectRepo,
                 phaseRepo: phaseRepo,
                 milestoneRepo: milestoneRepo,
@@ -251,8 +300,8 @@ struct iOSContentView: View {
                 conversationRepo: conversationRepo,
                 dependencyRepo: dependencyRepo
             )
-            let syncBackend = CloudKitSyncBackend()
-            let syncQueue = InMemorySyncQueue()
+            let syncBackend = CloudKitSyncBackend(containerIdentifier: "iCloud.com.aeobrien.projectmanager")
+            let syncQueue = SQLiteSyncQueue(dbQueue: db.dbQueue)
             let syncEngine = SyncEngine(
                 backend: syncBackend,
                 queue: syncQueue,
@@ -325,7 +374,8 @@ struct iOSContentView: View {
             let browserVM = ProjectBrowserViewModel(
                 projectRepo: projectRepo,
                 categoryRepo: categoryRepo,
-                documentRepo: documentRepo
+                documentRepo: documentRepo,
+                sessionRepo: sessionRepo
             )
             browserVM.syncManager = syncMgr
             self.projectBrowserVM = browserVM
@@ -495,8 +545,8 @@ struct iOSContentView: View {
             let projects = try await projectRepo.fetchAll()
             let focused = projects.first(where: { $0.lifecycleState == .focused })
             let defaults = UserDefaults(suiteName: "group.com.aeobrien.projectmanager.shared")
-            defaults?.set(projects.count, forKey: "widgetProjectCount")
-            defaults?.set(focused?.name, forKey: "widgetFocusedProjectName")
+            defaults?.set(projects.count, forKey: "projectCount")
+            defaults?.set(focused?.name, forKey: "focusedProjectName")
         } catch {
             Log.ui.error("Failed to update widget data: \(error)")
         }

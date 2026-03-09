@@ -5,6 +5,9 @@ import os
 
 /// Protocol for the remote sync backend, enabling testing without CloudKit.
 public protocol SyncBackendProtocol: Sendable {
+    /// Ensure the remote storage zone/container exists. Called once before the first push/pull.
+    func ensureZoneExists() async throws
+
     /// Push a batch of changes to the remote.
     func push(changes: [SyncChange], payloads: [UUID: Data]) async throws
 
@@ -42,6 +45,7 @@ public actor SyncEngine {
 
     private var syncState: SyncState
     private var isSyncing = false
+    private var zoneReady = false
 
     /// Minimum interval between syncs (seconds).
     public let minSyncInterval: TimeInterval
@@ -98,6 +102,13 @@ public actor SyncEngine {
 
         isSyncing = true
         defer { isSyncing = false }
+
+        // Ensure remote zone exists on first sync
+        if !zoneReady {
+            try await backend.ensureZoneExists()
+            zoneReady = true
+            Log.data.info("CloudKit zone ready")
+        }
 
         // Push local changes
         try await pushChanges()
@@ -195,6 +206,38 @@ public actor SyncEngine {
 
         let count = result.changes.count
         Log.data.info("Pulled \(count) changes from remote")
+    }
+
+    // MARK: - Initial Full Push
+
+    /// Enqueue all existing entities for sync. Call once when sync is first enabled
+    /// or when the queue has no history (e.g. after migrating from InMemorySyncQueue).
+    public func enqueueAllExistingEntities() async throws {
+        guard let provider = dataProvider else {
+            Log.data.error("Cannot enqueue all entities: no data provider")
+            return
+        }
+
+        let pending = try await queue.pendingCount()
+        if pending > 0 {
+            Log.data.info("Skipping initial enqueue: \(pending) changes already pending")
+            return
+        }
+
+        var total = 0
+        for entityType in SyncEntityType.allCases {
+            let ids = try await provider.allEntityIds(for: entityType)
+            for id in ids {
+                let change = SyncChange(
+                    entityType: entityType,
+                    entityId: id,
+                    changeType: .create
+                )
+                try await queue.enqueue(change)
+                total += 1
+            }
+        }
+        Log.data.info("Enqueued \(total) existing entities for initial sync")
     }
 
     // MARK: - State

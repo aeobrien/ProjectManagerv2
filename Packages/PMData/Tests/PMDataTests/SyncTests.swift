@@ -12,6 +12,10 @@ final class MockSyncBackend: SyncBackendProtocol, @unchecked Sendable {
     var remotePayloads: [UUID: Data] = [:]
     var newToken: Data? = nil
 
+    func ensureZoneExists() async throws {
+        if shouldThrow { throw SyncError.networkUnavailable }
+    }
+
     func push(changes: [SyncChange], payloads: [UUID: Data]) async throws {
         if shouldThrow { throw SyncError.networkUnavailable }
         pushedChanges.append(contentsOf: changes)
@@ -481,5 +485,11 @@ final class MockSyncDataProvider: SyncDataProviderProtocol, @unchecked Sendable 
 
     func deleteEntity(entityType: SyncEntityType, entityId: UUID) async throws {
         deletedIds.append(entityId)
+    }
+
+    var allEntityIdsResult: [UUID] = []
+
+    func allEntityIds(for entityType: SyncEntityType) async throws -> [UUID] {
+        allEntityIdsResult
     }
 }

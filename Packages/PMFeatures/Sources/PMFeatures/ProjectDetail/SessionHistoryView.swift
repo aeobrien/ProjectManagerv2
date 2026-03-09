@@ -11,6 +11,7 @@ struct SessionHistoryView: View {
     @State private var summaries: [UUID: SessionSummary] = [:]
     @State private var expandedSession: UUID?
     @State private var isLoading = false
+    @State private var sessionToDelete: Session?
 
     var body: some View {
         ScrollView {
@@ -28,9 +29,35 @@ struct SessionHistoryView: View {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(sessions) { session in
                         sessionCard(session)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    sessionToDelete = session
+                                } label: {
+                                    Label("Delete Session", systemImage: "trash")
+                                }
+                            }
                     }
                 }
                 .padding()
+                .confirmationDialog(
+                    "Delete Session",
+                    isPresented: Binding(
+                        get: { sessionToDelete != nil },
+                        set: { if !$0 { sessionToDelete = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        if let session = sessionToDelete {
+                            Task { await deleteSession(session) }
+                        }
+                    }
+                } message: {
+                    if let session = sessionToDelete {
+                        let messageCount = summaries[session.id]?.messageCount ?? 0
+                        Text("This will permanently delete this \(session.mode.displayName) session and its \(messageCount) messages. This cannot be undone.")
+                    }
+                }
             }
         }
         .task {
@@ -263,6 +290,19 @@ struct SessionHistoryView: View {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
         return "\(hours)h \(remainingMinutes)m"
+    }
+
+    private func deleteSession(_ session: Session) async {
+        do {
+            try await sessionRepo.delete(id: session.id)
+            sessions.removeAll { $0.id == session.id }
+            summaries.removeValue(forKey: session.id)
+            if expandedSession == session.id {
+                expandedSession = nil
+            }
+        } catch {
+            // Silently fail — session remains in list
+        }
     }
 
     private func loadSessions() async {

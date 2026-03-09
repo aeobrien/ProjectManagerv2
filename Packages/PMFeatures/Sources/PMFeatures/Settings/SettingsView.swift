@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import PMData
 import PMServices
 import PMDesignSystem
@@ -13,11 +14,21 @@ public struct SettingsView: View {
     var onboardingManager: OnboardingFlowManager?
     var categories: [PMDomain.Category] = []
     var aiDevScreenViewModelFactory: (() -> AIDevScreenViewModel)?
+    var dataExporter: DataExporter?
+    var dataImporter: DataImporter?
+    var allProjects: [Project] = []
     @State private var exportStatus: ExportStatus?
     @State private var isExporting = false
     @State private var showMigration = false
     @State private var showOnboarding = false
     @State private var showAIDevScreen = false
+    @State private var showBackupExportDialog = false
+    @State private var showBackupImportDialog = false
+    @State private var exportFileData: Data?
+    @State private var selectedExportProjectId: UUID?
+    @State private var backupMessage: String?
+    @State private var isBackupWorking = false
+    @State private var cachedAIDevScreenVM: AIDevScreenViewModel?
 
     public init(
         settings: SettingsManager,
@@ -26,7 +37,10 @@ public struct SettingsView: View {
         migrationViewModelFactory: (() -> MigrationViewModel)? = nil,
         onboardingManager: OnboardingFlowManager? = nil,
         categories: [PMDomain.Category] = [],
-        aiDevScreenViewModelFactory: (() -> AIDevScreenViewModel)? = nil
+        aiDevScreenViewModelFactory: (() -> AIDevScreenViewModel)? = nil,
+        dataExporter: DataExporter? = nil,
+        dataImporter: DataImporter? = nil,
+        allProjects: [Project] = []
     ) {
         self.settings = settings
         self.exportService = exportService
@@ -35,6 +49,9 @@ public struct SettingsView: View {
         self.onboardingManager = onboardingManager
         self.categories = categories
         self.aiDevScreenViewModelFactory = aiDevScreenViewModelFactory
+        self.dataExporter = dataExporter
+        self.dataImporter = dataImporter
+        self.allProjects = allProjects
     }
 
     public var body: some View {
@@ -49,7 +66,7 @@ public struct SettingsView: View {
                 aiSection
                 promptTemplatesSection
                 importSection
-                exportSection
+                dataBackupSection
                 syncSection
                 lifePlannerSyncSection
                 integrationSection
@@ -77,8 +94,13 @@ public struct SettingsView: View {
             }
         }
         .sheet(isPresented: $showAIDevScreen) {
-            if let factory = aiDevScreenViewModelFactory {
-                AIDevScreenView(viewModel: factory())
+            if let vm = cachedAIDevScreenVM {
+                AIDevScreenView(viewModel: vm)
+            }
+        }
+        .onChange(of: showAIDevScreen) { _, isShowing in
+            if !isShowing {
+                cachedAIDevScreenVM = nil
             }
         }
         .sheet(isPresented: $showOnboarding) {
@@ -87,6 +109,27 @@ public struct SettingsView: View {
                     #if os(macOS)
                     .frame(minWidth: 700, idealWidth: 800, minHeight: 600)
                     #endif
+            }
+        }
+        .fileExporter(
+            isPresented: $showBackupExportDialog,
+            document: exportFileData.map { JSONFileDocument(data: $0) },
+            contentType: .json,
+            defaultFilename: "ProjectManager-Backup-\(Self.dateStamp()).json"
+        ) { result in
+            switch result {
+            case .success:
+                backupMessage = "Backup exported successfully."
+            case .failure(let error):
+                backupMessage = "Export failed: \(error.localizedDescription)"
+            }
+        }
+        .fileImporter(
+            isPresented: $showBackupImportDialog,
+            allowedContentTypes: [.json]
+        ) { result in
+            Task {
+                await handleBackupImport(result)
             }
         }
     }
@@ -235,14 +278,48 @@ public struct SettingsView: View {
                 SecureField("API Key", text: $settings.aiApiKey)
                     .textFieldStyle(.roundedBorder)
 
-                TextField("Model identifier", text: $settings.aiModel)
-                    .textFieldStyle(.roundedBorder)
+                if settings.aiProvider == "anthropic" {
+                    Picker("Model", selection: $settings.aiModel) {
+                        ForEach(AnthropicModel.allCases, id: \.rawValue) { model in
+                            Text(model.displayName).tag(model.rawValue)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Adaptive Thinking")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Text("Enabled on Opus 4.6 and Sonnet 4.6. Claude decides when and how much to think based on task complexity. Exploration, Definition, and Planning use high effort; Execution Support uses medium effort.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Picker("Model", selection: $settings.aiModel) {
+                        ForEach(OpenAIModel.allCases, id: \.rawValue) { model in
+                            Text(model.displayName).tag(model.rawValue)
+                        }
+                    }
+                }
 
                 Picker("Trust level", selection: $settings.aiTrustLevel) {
                     Text("Confirm All").tag("confirmAll")
                     Text("Auto-apply Minor").tag("autoMinor")
                     Text("Auto-apply All").tag("autoAll")
                 }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Codebase Indexing")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Text("Default size limit for codebase indexing. Individual codebases can override this.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Stepper("Default Size Limit: \(settings.defaultCodebaseSizeLimitMB) MB",
+                        value: $settings.defaultCodebaseSizeLimitMB, in: 5...200, step: 5)
             }
         }
     }
@@ -274,59 +351,90 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Export
+    // MARK: - Data Backup
 
-    private var exportSection: some View {
+    private var dataBackupSection: some View {
         PMCard {
             VStack(alignment: .leading, spacing: 12) {
-                PMSectionHeader("Data Export", subtitle: "Export project data for external tools")
+                PMSectionHeader("Data Backup", subtitle: "Export and import full project backups")
 
-                if let exportService {
-                    HStack {
-                        Button {
-                            Task {
-                                isExporting = true
-                                _ = await exportService.triggerLifePlannerExport()
-                                exportStatus = await exportService.currentStatus()
-                                isExporting = false
+                if let dataExporter {
+                    // Export full backup
+                    Button {
+                        Task {
+                            isBackupWorking = true
+                            backupMessage = nil
+                            do {
+                                exportFileData = try await dataExporter.exportAll()
+                                showBackupExportDialog = true
+                            } catch {
+                                backupMessage = "Export failed: \(error.localizedDescription)"
                             }
-                        } label: {
-                            if isExporting {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Label("Export Now", systemImage: "square.and.arrow.up")
-                            }
+                            isBackupWorking = false
                         }
-                        .disabled(isExporting)
+                    } label: {
+                        Label("Export Full Backup", systemImage: "arrow.down.doc")
+                    }
+                    .disabled(isBackupWorking)
 
-                        Spacer()
+                    // Export single project
+                    if !allProjects.isEmpty {
+                        Divider()
 
-                        if let status = exportStatus {
-                            VStack(alignment: .trailing, spacing: 2) {
-                                if let result = status.lastResult {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: result == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                            .foregroundStyle(result == .success ? .green : .red)
-                                        Text(result == .success ? "Success" : result.rawValue)
-                                            .font(.caption)
-                                    }
+                        HStack {
+                            Picker("Project", selection: $selectedExportProjectId) {
+                                Text("Select a project...").tag(UUID?.none)
+                                ForEach(allProjects) { project in
+                                    Text(project.name).tag(UUID?.some(project.id))
                                 }
-                                if let date = status.lastExportDate {
-                                    Text(date, style: .relative)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text("\(status.exportCount) total exports")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
                             }
+                            .frame(maxWidth: 300)
+
+                            Button {
+                                guard let projectId = selectedExportProjectId else { return }
+                                Task {
+                                    isBackupWorking = true
+                                    backupMessage = nil
+                                    do {
+                                        exportFileData = try await dataExporter.exportProject(id: projectId)
+                                        showBackupExportDialog = true
+                                    } catch {
+                                        backupMessage = "Export failed: \(error.localizedDescription)"
+                                    }
+                                    isBackupWorking = false
+                                }
+                            } label: {
+                                Label("Export Project", systemImage: "arrow.down.doc")
+                            }
+                            .disabled(selectedExportProjectId == nil || isBackupWorking)
                         }
                     }
+
+                    Divider()
+
+                    // Import from backup
+                    Button {
+                        backupMessage = nil
+                        showBackupImportDialog = true
+                    } label: {
+                        Label("Import from Backup", systemImage: "arrow.up.doc")
+                    }
+                    .disabled(dataImporter == nil || isBackupWorking)
                 } else {
-                    Text("Export service not configured")
+                    Text("Backup service not configured")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if isBackupWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                if let backupMessage {
+                    Text(backupMessage)
+                        .font(.caption)
+                        .foregroundStyle(backupMessage.contains("failed") ? .red : .green)
                 }
             }
         }
@@ -500,6 +608,7 @@ public struct SettingsView: View {
                 PMSectionHeader("AI System V2 (Dev)", subtitle: "Development testing screen for the V2 AI pipeline")
 
                 Button {
+                    cachedAIDevScreenVM = aiDevScreenViewModelFactory?()
                     showAIDevScreen = true
                 } label: {
                     Label("Open Dev Screen", systemImage: "terminal")
@@ -519,6 +628,55 @@ public struct SettingsView: View {
         components.hour = hour
         let date = Calendar.current.date(from: components) ?? Date()
         return formatter.string(from: date)
+    }
+
+    private static func dateStamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
+    private func handleBackupImport(_ result: Result<URL, Error>) async {
+        guard let dataImporter else {
+            backupMessage = "Import failed: importer not configured"
+            return
+        }
+        isBackupWorking = true
+        backupMessage = nil
+        do {
+            let url = try result.get()
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            let data = try Data(contentsOf: url)
+            let summary = try await dataImporter.importData(from: data)
+            backupMessage = "Imported: \(summary.totalCreated) created, \(summary.totalUpdated) updated"
+        } catch {
+            backupMessage = "Import failed: \(error.localizedDescription)"
+        }
+        isBackupWorking = false
+    }
+}
+
+// MARK: - JSON File Document
+
+struct JSONFileDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    let data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let fileData = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        self.data = fileData
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
 

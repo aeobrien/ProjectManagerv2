@@ -38,10 +38,18 @@ public final class SessionLifecycleManager: Sendable {
     }
 
     /// Resumes a paused session, transitioning it back to active.
+    /// If the session is already active, returns it as-is.
     @discardableResult
     public func resumeSession(_ sessionId: UUID) async throws -> Session {
         guard var session = try await repo.fetch(id: sessionId) else {
             throw SessionError.sessionNotFound
+        }
+        // Already active — just update lastActiveAt and return
+        if session.status == .active {
+            session.lastActiveAt = Date()
+            try await repo.save(session)
+            Log.ai.info("Session \(sessionId) already active, refreshed lastActiveAt")
+            return session
         }
         guard let newStatus = SessionStateMachine.transition(from: session.status, to: .active) else {
             throw SessionError.invalidTransition(
@@ -78,6 +86,18 @@ public final class SessionLifecycleManager: Sendable {
         try await repo.save(session)
         Log.ai.info("Transitioned session \(sessionId) to \(target.rawValue)")
         return session
+    }
+
+    /// Completes all active/paused sessions for a project except the excluded session ID.
+    /// Used to clean up orphaned sessions that accumulate from accidental dismissals.
+    public func completeStaleSessions(forProject projectId: UUID, excluding sessionId: UUID?) async throws {
+        let existing = try await repo.fetchActive(forProject: projectId)
+        for var session in existing where session.id != sessionId {
+            session.status = .completed
+            session.completedAt = Date()
+            try await repo.save(session)
+            Log.ai.info("Completed stale session \(session.id) (was \(session.status.rawValue)) for project \(projectId)")
+        }
     }
 
     /// Adds a message to a session.

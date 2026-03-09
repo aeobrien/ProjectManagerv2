@@ -126,6 +126,77 @@ public final class DataImporter: Sendable {
                 try record.insert(db)
             }
         }
+
+        // Document versions
+        for docVersion in export.documentVersions {
+            if try DocumentVersion.fetchOne(db, key: docVersion.id) != nil {
+                try docVersion.update(db)
+                summary.documentVersionsUpdated += 1
+            } else {
+                try docVersion.insert(db)
+                summary.documentVersionsCreated += 1
+            }
+        }
+
+        // Sessions with messages and summaries
+        for sessionExport in export.sessions {
+            let session = sessionExport.session
+            if try Session.fetchOne(db, key: session.id) != nil {
+                try session.update(db)
+                summary.sessionsUpdated += 1
+            } else {
+                try session.insert(db)
+                summary.sessionsCreated += 1
+            }
+
+            // Replace all messages for this session (mirrors ChatMessage pattern)
+            try SessionMessage.filter(Column("sessionId") == session.id).deleteAll(db)
+            for message in sessionExport.messages {
+                try message.insert(db)
+            }
+
+            // Upsert summary if present
+            if let summaryRecord = sessionExport.summary {
+                if try SessionSummary.fetchOne(db, key: summaryRecord.id) != nil {
+                    try summaryRecord.update(db)
+                } else {
+                    try summaryRecord.insert(db)
+                }
+            }
+        }
+
+        // Process profile (0 or 1 per project)
+        if let profile = export.processProfile {
+            if try ProcessProfile.fetchOne(db, key: profile.id) != nil {
+                try profile.update(db)
+                summary.processProfilesUpdated += 1
+            } else {
+                try profile.insert(db)
+                summary.processProfilesCreated += 1
+            }
+        }
+
+        // Deliverables
+        for deliverable in export.deliverables {
+            if try Deliverable.fetchOne(db, key: deliverable.id) != nil {
+                try deliverable.update(db)
+                summary.deliverablesUpdated += 1
+            } else {
+                try deliverable.insert(db)
+                summary.deliverablesCreated += 1
+            }
+        }
+
+        // Codebases (imported without bookmarkData — local ones need re-linking, GitHub ones re-clone)
+        for codebase in export.codebases {
+            if try Codebase.fetchOne(db, key: codebase.id) != nil {
+                try codebase.update(db)
+                summary.codebasesUpdated += 1
+            } else {
+                try codebase.insert(db)
+                summary.codebasesCreated += 1
+            }
+        }
     }
 }
 
@@ -137,7 +208,25 @@ public struct ImportSummary: Equatable, Sendable {
     public var projectsUpdated: Int = 0
     public var dependenciesCreated: Int = 0
     public var dependenciesUpdated: Int = 0
+    public var documentVersionsCreated: Int = 0
+    public var documentVersionsUpdated: Int = 0
+    public var sessionsCreated: Int = 0
+    public var sessionsUpdated: Int = 0
+    public var processProfilesCreated: Int = 0
+    public var processProfilesUpdated: Int = 0
+    public var deliverablesCreated: Int = 0
+    public var deliverablesUpdated: Int = 0
+    public var codebasesCreated: Int = 0
+    public var codebasesUpdated: Int = 0
 
-    public var totalCreated: Int { categoriesCreated + projectsCreated + dependenciesCreated }
-    public var totalUpdated: Int { categoriesUpdated + projectsUpdated + dependenciesUpdated }
+    public var totalCreated: Int {
+        categoriesCreated + projectsCreated + dependenciesCreated +
+        documentVersionsCreated + sessionsCreated + processProfilesCreated + deliverablesCreated +
+        codebasesCreated
+    }
+    public var totalUpdated: Int {
+        categoriesUpdated + projectsUpdated + dependenciesUpdated +
+        documentVersionsUpdated + sessionsUpdated + processProfilesUpdated + deliverablesUpdated +
+        codebasesUpdated
+    }
 }

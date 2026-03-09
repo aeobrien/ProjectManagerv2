@@ -11,17 +11,21 @@ public struct ConversationResult: Sendable {
     /// Token usage from the API call.
     public let inputTokens: Int?
     public let outputTokens: Int?
+    /// Information about context truncation that occurred during assembly.
+    public let truncationInfo: ContextTruncationInfo?
 
     public init(
         naturalLanguage: String,
         actions: [AIAction] = [],
         inputTokens: Int? = nil,
-        outputTokens: Int? = nil
+        outputTokens: Int? = nil,
+        truncationInfo: ContextTruncationInfo? = nil
     ) {
         self.naturalLanguage = naturalLanguage
         self.actions = actions
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.truncationInfo = truncationInfo
     }
 }
 
@@ -40,21 +44,22 @@ public struct ConversationConfig: Sendable {
         self.llmConfig = llmConfig
     }
 
-    /// Default configurations per mode.
+    /// Default configurations per mode with adaptive thinking.
+    /// Exploration, Definition, Planning use high effort; Execution Support uses medium.
     public static func forMode(_ mode: SessionMode, subMode: SessionSubMode? = nil) -> ConversationConfig {
         switch mode {
         case .exploration:
-            return ConversationConfig(parseActions: false)
+            return ConversationConfig(parseActions: false, llmConfig: LLMRequestConfig(thinkingEffort: .high))
         case .definition:
-            return ConversationConfig(parseActions: false)
+            return ConversationConfig(parseActions: false, llmConfig: LLMRequestConfig(thinkingEffort: .high))
         case .planning:
-            return ConversationConfig(parseActions: true)
+            return ConversationConfig(parseActions: true, llmConfig: LLMRequestConfig(thinkingEffort: .high))
         case .executionSupport:
             switch subMode {
             case .checkIn, .projectReview:
-                return ConversationConfig(parseActions: true)
+                return ConversationConfig(parseActions: true, llmConfig: LLMRequestConfig(thinkingEffort: .medium))
             default:
-                return ConversationConfig(parseActions: false)
+                return ConversationConfig(parseActions: false, llmConfig: LLMRequestConfig(thinkingEffort: .medium))
             }
         }
     }
@@ -111,9 +116,30 @@ public final class ConversationManager: Sendable {
     }
 
     /// Check if a project has a paused session that can be resumed.
+    @available(*, deprecated, message: "Use resumableSession(forProject:mode:subMode:) instead")
     public func pausedSession(forProject projectId: UUID) async throws -> Session? {
         let active = try await sessionRepo.fetchActive(forProject: projectId)
         return active.first { $0.status == .paused }
+    }
+
+    /// Find a resumable session (active or paused) matching the given project, mode, and subMode.
+    /// Returns the most recently active matching session, or nil if none exists.
+    public func resumableSession(
+        forProject projectId: UUID,
+        mode: SessionMode,
+        subMode: SessionSubMode?
+    ) async throws -> Session? {
+        let existing = try await sessionRepo.fetchActive(forProject: projectId)
+        return existing
+            .filter { ($0.status == .active || $0.status == .paused) && $0.mode == mode && $0.subMode == subMode }
+            .sorted { $0.lastActiveAt > $1.lastActiveAt }
+            .first
+    }
+
+    /// Clean up stale active/paused sessions for a project, excluding a specific session.
+    /// Transitions them to .completed to prevent orphan accumulation.
+    public func cleanupStaleSessions(forProject projectId: UUID, excluding sessionId: UUID?) async throws {
+        try await lifecycleManager.completeStaleSessions(forProject: projectId, excluding: sessionId)
     }
 
     // MARK: - Steps 2-4: Context Assembly → Message Handling → Response Processing
@@ -167,11 +193,43 @@ public final class ConversationManager: Sendable {
             conversationHistory: conversationHistory
         )
 
-        // Step 4: Call LLM
-        let response = try await llmClient.send(
+        // Step 4: Call LLM (with auto-continuation if response is truncated)
+        var response = try await llmClient.send(
             messages: payload.messages,
             config: effectiveConfig.llmConfig
         )
+
+        // Auto-continue if the response was truncated due to max_tokens.
+        // Sends the truncated response back as an assistant message and asks
+        // the model to continue, then concatenates the results.
+        let maxContinuations = 3
+        var continuationCount = 0
+        while response.wasTruncated && continuationCount < maxContinuations {
+            continuationCount += 1
+            Log.ai.notice("Response truncated (stop_reason=\(response.stopReason ?? "nil")), auto-continuing (\(continuationCount)/\(maxContinuations))")
+
+            // Build continuation messages: original messages + truncated assistant response + continue prompt
+            var continuationMessages = payload.messages
+            continuationMessages.append(LLMMessage(role: .assistant, content: response.content))
+            continuationMessages.append(LLMMessage(role: .user, content: "Your previous response was cut off. Please continue exactly where you left off."))
+
+            let continuation = try await llmClient.send(
+                messages: continuationMessages,
+                config: effectiveConfig.llmConfig
+            )
+
+            // Concatenate the content
+            response = LLMResponse(
+                content: response.content + continuation.content,
+                inputTokens: (response.inputTokens ?? 0) + (continuation.inputTokens ?? 0),
+                outputTokens: (response.outputTokens ?? 0) + (continuation.outputTokens ?? 0),
+                stopReason: continuation.stopReason
+            )
+        }
+
+        if continuationCount > 0 {
+            Log.ai.info("Auto-continued \(continuationCount) time(s), final response: \(response.content.count) chars")
+        }
 
         // Step 5: Parse response
         let parsed: ParsedResponse
@@ -181,7 +239,7 @@ public final class ConversationManager: Sendable {
             parsed = ParsedResponse(naturalLanguage: response.content, actions: [])
         }
 
-        // Record assistant message
+        // Record assistant message (the full concatenated response)
         _ = try await lifecycleManager.addMessage(
             to: sessionId,
             role: .assistant,
@@ -192,7 +250,8 @@ public final class ConversationManager: Sendable {
             naturalLanguage: parsed.naturalLanguage,
             actions: parsed.actions,
             inputTokens: response.inputTokens,
-            outputTokens: response.outputTokens
+            outputTokens: response.outputTokens,
+            truncationInfo: payload.truncationInfo
         )
     }
 
@@ -283,11 +342,32 @@ public final class ConversationManager: Sendable {
 
         case .executionSupport:
             if let subMode {
-                variables["sub_mode"] = subMode.rawValue
+                variables["sub_mode"] = subMode.displayName
             }
 
         case .planning:
-            break
+            // Inject planning context from deliverables/documents
+            var planningParts: [String] = []
+            let completedDeliverables = projectData.deliverables.filter { $0.status == .completed || $0.status == .revised }
+            if !completedDeliverables.isEmpty {
+                planningParts.append("Completed deliverables: \(completedDeliverables.map(\.type.rawValue).joined(separator: ", "))")
+            }
+            // Include document summaries for planning reference
+            let keyDocs = projectData.documents.filter {
+                $0.type == .visionStatement || $0.type == .technicalBrief || $0.type == .other
+            }
+            if !keyDocs.isEmpty {
+                planningParts.append("Available reference documents: \(keyDocs.map(\.title).joined(separator: ", "))")
+            }
+            variables["planning_context"] = planningParts.isEmpty ? "No reference documents yet." : planningParts.joined(separator: "\n")
+
+            // Inject frequently deferred task context
+            if !projectData.frequentlyDeferredTasks.isEmpty {
+                let deferredNames = projectData.frequentlyDeferredTasks.prefix(5).map { "\($0.name) (deferred \($0.timesDeferred)x)" }
+                variables["frequently_deferred_context"] = "Note: The following tasks have been frequently deferred in the past. Consider whether they need to be broken down smaller or approached differently:\n" + deferredNames.joined(separator: "\n")
+            } else {
+                variables["frequently_deferred_context"] = ""
+            }
         }
 
         return promptComposer.compose(mode: mode, subMode: subMode, variables: variables)

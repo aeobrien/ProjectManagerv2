@@ -18,7 +18,7 @@ public struct ExportMetadata: Codable, Sendable {
     public init(appVersion: String = "1.0.0") {
         self.exportDate = Date()
         self.appVersion = appVersion
-        self.formatVersion = 1
+        self.formatVersion = 2
     }
 }
 
@@ -28,6 +28,49 @@ public struct ProjectExport: Codable, Sendable {
     public var documents: [Document]
     public var checkIns: [CheckInRecord]
     public var conversations: [ConversationExport]
+    public var documentVersions: [DocumentVersion]
+    public var sessions: [SessionExport]
+    public var processProfile: ProcessProfile?
+    public var deliverables: [Deliverable]
+    public var codebases: [Codebase]
+
+    public init(
+        project: Project,
+        phases: [PhaseExport],
+        documents: [Document],
+        checkIns: [CheckInRecord],
+        conversations: [ConversationExport],
+        documentVersions: [DocumentVersion] = [],
+        sessions: [SessionExport] = [],
+        processProfile: ProcessProfile? = nil,
+        deliverables: [Deliverable] = [],
+        codebases: [Codebase] = []
+    ) {
+        self.project = project
+        self.phases = phases
+        self.documents = documents
+        self.checkIns = checkIns
+        self.conversations = conversations
+        self.documentVersions = documentVersions
+        self.sessions = sessions
+        self.processProfile = processProfile
+        self.deliverables = deliverables
+        self.codebases = codebases
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        project = try container.decode(Project.self, forKey: .project)
+        phases = try container.decode([PhaseExport].self, forKey: .phases)
+        documents = try container.decode([Document].self, forKey: .documents)
+        checkIns = try container.decode([CheckInRecord].self, forKey: .checkIns)
+        conversations = try container.decode([ConversationExport].self, forKey: .conversations)
+        documentVersions = try container.decodeIfPresent([DocumentVersion].self, forKey: .documentVersions) ?? []
+        sessions = try container.decodeIfPresent([SessionExport].self, forKey: .sessions) ?? []
+        processProfile = try container.decodeIfPresent(ProcessProfile.self, forKey: .processProfile)
+        deliverables = try container.decodeIfPresent([Deliverable].self, forKey: .deliverables) ?? []
+        codebases = try container.decodeIfPresent([Codebase].self, forKey: .codebases) ?? []
+    }
 }
 
 public struct PhaseExport: Codable, Sendable {
@@ -48,6 +91,12 @@ public struct TaskExport: Codable, Sendable {
 public struct ConversationExport: Codable, Sendable {
     public var conversation: Conversation
     public var messages: [ChatMessage]
+}
+
+public struct SessionExport: Codable, Sendable {
+    public var session: Session
+    public var messages: [SessionMessage]
+    public var summary: SessionSummary?
 }
 
 /// Exports data from the database to JSON.
@@ -134,12 +183,62 @@ public final class DataExporter: Sendable {
             return ConversationExport(conversation: convo, messages: messages)
         }
 
+        // Document versions for all documents in this project
+        let documentIds = documents.map { $0.id }
+        let documentVersions: [DocumentVersion]
+        if documentIds.isEmpty {
+            documentVersions = []
+        } else {
+            documentVersions = try DocumentVersion
+                .filter(documentIds.contains(Column("documentId")))
+                .order(Column("version"))
+                .fetchAll(db)
+        }
+
+        // Sessions with messages and summaries
+        let sessions = try Session.filter(Column("projectId") == project.id)
+            .order(Column("createdAt")).fetchAll(db)
+        let sessionExports = try sessions.map { session -> SessionExport in
+            let messages = try SessionMessage
+                .filter(Column("sessionId") == session.id)
+                .order(Column("timestamp")).fetchAll(db)
+            let summary = try SessionSummary
+                .filter(Column("sessionId") == session.id)
+                .fetchOne(db)
+            return SessionExport(session: session, messages: messages, summary: summary)
+        }
+
+        // Process profile (0 or 1 per project)
+        let processProfile = try ProcessProfile
+            .filter(Column("projectId") == project.id)
+            .fetchOne(db)
+
+        // Deliverables
+        let deliverables = try Deliverable
+            .filter(Column("projectId") == project.id)
+            .fetchAll(db)
+
+        // Codebases (exclude bookmarkData — not portable across machines)
+        let codebases = try Codebase
+            .filter(Column("projectId") == project.id)
+            .fetchAll(db)
+            .map { cb -> Codebase in
+                var exported = cb
+                exported.bookmarkData = nil
+                return exported
+            }
+
         return ProjectExport(
             project: project,
             phases: phaseExports,
             documents: documents,
             checkIns: checkIns,
-            conversations: conversationExports
+            conversations: conversationExports,
+            documentVersions: documentVersions,
+            sessions: sessionExports,
+            processProfile: processProfile,
+            deliverables: deliverables,
+            codebases: codebases
         )
     }
 

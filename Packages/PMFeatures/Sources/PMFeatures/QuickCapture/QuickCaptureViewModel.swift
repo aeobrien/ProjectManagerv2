@@ -27,6 +27,15 @@ public final class QuickCaptureViewModel {
     /// Optional sync manager for tracking changes.
     public var syncManager: SyncManager?
 
+    /// Optional codebase repository for attaching codebases after project creation.
+    public var codebaseRepo: CodebaseRepositoryProtocol?
+
+    /// The ID of the last saved project, for attaching a codebase.
+    public private(set) var lastSavedProjectId: UUID?
+
+    /// Whether to show the codebase add sheet after saving.
+    public var showCodebaseSheet = false
+
     // MARK: - Init
 
     public init(projectRepo: ProjectRepositoryProtocol, categoryRepo: CategoryRepositoryProtocol) {
@@ -82,8 +91,13 @@ public final class QuickCaptureViewModel {
             )
             try await projectRepo.save(project)
             syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
+            lastSavedProjectId = project.id
             didSave = true
-            scheduleAutoReset()
+            // Only auto-reset if no codebase attachment is available;
+            // otherwise let the user click "Attach Codebase" or "Done" manually.
+            if codebaseRepo == nil {
+                scheduleAutoReset()
+            }
             Log.ui.info("Quick captured project '\(projectName)'")
         } catch {
             self.error = error.localizedDescription
@@ -100,6 +114,8 @@ public final class QuickCaptureViewModel {
         selectedCategoryId = nil
         error = nil
         didSave = false
+        lastSavedProjectId = nil
+        showCodebaseSheet = false
     }
 
     /// Schedules an automatic form reset after a 2-second success display.

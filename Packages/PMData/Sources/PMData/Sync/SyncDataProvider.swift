@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import PMDomain
 import PMUtilities
 import os
@@ -13,6 +14,9 @@ public protocol SyncDataProviderProtocol: Sendable {
 
     /// Delete an entity locally (triggered by remote delete).
     func deleteEntity(entityType: SyncEntityType, entityId: UUID) async throws
+
+    /// Return all entity IDs for a given type. Used for initial full sync.
+    func allEntityIds(for entityType: SyncEntityType) async throws -> [UUID]
 }
 
 /// Concrete implementation that uses repository protocols for entity serialization.
@@ -28,10 +32,12 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
     private let conversationRepo: ConversationRepositoryProtocol
     private let dependencyRepo: DependencyRepositoryProtocol
 
+    private let dbQueue: DatabaseQueue
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init(
+        dbQueue: DatabaseQueue,
         projectRepo: ProjectRepositoryProtocol,
         phaseRepo: PhaseRepositoryProtocol,
         milestoneRepo: MilestoneRepositoryProtocol,
@@ -43,6 +49,7 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         conversationRepo: ConversationRepositoryProtocol,
         dependencyRepo: DependencyRepositoryProtocol
     ) {
+        self.dbQueue = dbQueue
         self.projectRepo = projectRepo
         self.phaseRepo = phaseRepo
         self.milestoneRepo = milestoneRepo
@@ -154,5 +161,26 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         case .dependency: try await dependencyRepo.delete(id: entityId)
         }
         Log.data.info("Deleted remote \(entityType.rawValue) \(entityId)")
+    }
+
+    // MARK: - All Entity IDs
+
+    public func allEntityIds(for entityType: SyncEntityType) async throws -> [UUID] {
+        let tableName: String
+        switch entityType {
+        case .project:      tableName = "project"
+        case .phase:        tableName = "phase"
+        case .milestone:    tableName = "milestone"
+        case .task:         tableName = "pmTask"
+        case .subtask:      tableName = "subtask"
+        case .checkIn:      tableName = "checkInRecord"
+        case .document:     tableName = "document"
+        case .category:     tableName = "category"
+        case .conversation: tableName = "conversation"
+        case .dependency:   tableName = "dependency"
+        }
+        return try await dbQueue.read { db in
+            try UUID.fetchAll(db, sql: "SELECT id FROM \(tableName)")
+        }
     }
 }

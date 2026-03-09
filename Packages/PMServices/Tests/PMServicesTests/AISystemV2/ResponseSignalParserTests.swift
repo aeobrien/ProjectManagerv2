@@ -207,7 +207,7 @@ struct ResponseSignalParserTests {
         #expect(result.naturalLanguage.contains("I'll create that"))
     }
 
-    @Test("Actions not parsed when disabled")
+    @Test("Actions not parsed when disabled but stripped from text")
     func actionsIgnoredWhenDisabled() {
         let response = """
         Some text.
@@ -216,8 +216,9 @@ struct ResponseSignalParserTests {
         """
         let result = parser.parse(response, parseActions: false)
         #expect(result.actions.isEmpty)
-        // The action block text remains in natural language since we didn't parse it
-        #expect(result.naturalLanguage.contains("ACTION"))
+        // ACTION blocks are stripped from text even when not parsed, to prevent raw tags showing in UI
+        #expect(!result.naturalLanguage.contains("ACTION"))
+        #expect(result.naturalLanguage.contains("Some text."))
     }
 
     // MARK: - Edge Cases

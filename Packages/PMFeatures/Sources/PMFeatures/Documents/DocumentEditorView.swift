@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import PMDomain
 import PMDesignSystem
 
@@ -8,6 +9,8 @@ public struct DocumentEditorView: View {
     @State private var showMarkdownPreview = false
     @State private var showVersionHistory = false
     @State private var typeFilter: DocumentType?
+    @State private var exportMessage: String?
+    @State private var exportError: String?
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -91,9 +94,58 @@ public struct DocumentEditorView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
+            #if os(macOS)
             .frame(maxWidth: 250)
+            #endif
 
             Spacer()
+
+            if let msg = exportMessage {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            } else if let err = exportError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .transition(.opacity)
+            }
+
+            Button {
+                viewModel.showExportPicker = true
+            } label: {
+                Label("Export All", systemImage: "square.and.arrow.up")
+            }
+            .disabled(viewModel.documents.isEmpty)
+            .help("Export all documents as Markdown files")
+            .fileImporter(
+                isPresented: $viewModel.showExportPicker,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let directory = urls.first else { return }
+                    let gotAccess = directory.startAccessingSecurityScopedResource()
+                    defer { if gotAccess { directory.stopAccessingSecurityScopedResource() } }
+                    do {
+                        let count = try viewModel.exportAllAsMarkdown(to: directory)
+                        withAnimation {
+                            exportMessage = "Exported \(count) file\(count == 1 ? "" : "s")"
+                        }
+                        // Clear message after a few seconds
+                        Task {
+                            try? await Task.sleep(for: .seconds(3))
+                            withAnimation { exportMessage = nil }
+                        }
+                    } catch {
+                        exportError = "Export failed: \(error.localizedDescription)"
+                    }
+                case .failure(let error):
+                    exportError = "Export failed: \(error.localizedDescription)"
+                }
+            }
 
             Menu {
                 Button("Vision Statement") {

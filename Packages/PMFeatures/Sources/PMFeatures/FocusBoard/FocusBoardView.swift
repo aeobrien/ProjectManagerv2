@@ -70,6 +70,27 @@ public struct FocusBoardView: View {
     // MARK: - Effort Filter Bar
 
     private var effortFilterBar: some View {
+        #if os(iOS)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(label: "All Types", isSelected: viewModel.effortTypeFilter == nil) {
+                    viewModel.effortTypeFilter = nil
+                }
+                ForEach(EffortType.allCases, id: \.self) { effort in
+                    FilterChip(
+                        label: effort.rawValue.camelCaseToWords,
+                        isSelected: viewModel.effortTypeFilter == effort,
+                        tint: effort.color
+                    ) {
+                        viewModel.effortTypeFilter = effort
+                    }
+                }
+            }
+            .fixedSize()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        #else
         HStack(spacing: 8) {
             FilterChip(label: "All Types", isSelected: viewModel.effortTypeFilter == nil) {
                 viewModel.effortTypeFilter = nil
@@ -87,6 +108,7 @@ public struct FocusBoardView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+        #endif
     }
 
     // MARK: - Board Content

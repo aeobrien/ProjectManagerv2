@@ -22,15 +22,11 @@ public struct ResponseSignalParser: Sendable {
         // Extract single-line signals
         text = extractLineSignals(from: text, into: &signals)
 
-        // Parse actions if enabled
-        let actions: [AIAction]
-        if parseActions {
-            let parsed = actionParser.parse(text)
-            text = parsed.naturalLanguage
-            actions = parsed.actions
-        } else {
-            actions = []
-        }
+        // Parse actions — always strip ACTION blocks from displayed text to prevent raw tags showing.
+        // Only return parsed actions if parsing is enabled.
+        let parsed = actionParser.parse(text)
+        text = parsed.naturalLanguage
+        let actions: [AIAction] = parseActions ? parsed.actions : []
 
         // Clean up excess whitespace from signal removal
         let cleanedText = text

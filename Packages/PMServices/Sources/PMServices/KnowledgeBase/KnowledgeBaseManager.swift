@@ -112,6 +112,33 @@ public final class KnowledgeBaseManager: Sendable {
         )
     }
 
+    /// Index pre-chunked text without clearing existing entries for the source.
+    /// Used by CodebaseIndexer which manages its own clearing lifecycle.
+    public func indexChunks(
+        projectId: UUID,
+        sourceId: UUID,
+        contentType: KBContentType,
+        chunks: [String]
+    ) async throws {
+        guard !chunks.isEmpty else { return }
+
+        let vectors = try await embeddingService.embed(chunks)
+
+        let storedEmbeddings = chunks.enumerated().map { i, chunk in
+            StoredEmbedding(
+                chunkId: UUID(),
+                projectId: projectId,
+                sourceId: sourceId,
+                contentType: contentType,
+                text: chunk,
+                embedding: vectors[i]
+            )
+        }
+
+        try await store.storeBatch(storedEmbeddings)
+        Log.ai.info("Indexed \(storedEmbeddings.count) chunks for source \(sourceId)")
+    }
+
     /// Remove all indexed content for a source.
     public func removeIndex(sourceId: UUID) async throws {
         try await store.deleteBySource(sourceId: sourceId)
@@ -125,14 +152,18 @@ public final class KnowledgeBaseManager: Sendable {
     // MARK: - Retrieval
 
     /// Search the knowledge base for content relevant to the query.
+    /// - Parameter minScore: Override the default minimum similarity threshold. Pass a lower value for code searches.
     public func search(
         query: String,
         projectId: UUID,
         topK: Int? = nil,
+        minScore scoreOverride: Float? = nil,
         contentTypes: [KBContentType]? = nil
     ) async throws -> [RetrievalResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
+
+        let effectiveMinScore = scoreOverride ?? minScore
 
         // Generate query embedding
         let queryVector = try await embeddingService.embed(trimmed)
@@ -145,10 +176,12 @@ public final class KnowledgeBaseManager: Sendable {
             candidates = candidates.filter { types.contains($0.contentType) }
         }
 
+        Log.ai.debug("KB search: \(candidates.count) candidates for project, minScore=\(effectiveMinScore)")
+
         // Brute-force cosine similarity
         var results: [RetrievalResult] = candidates.compactMap { stored in
             let score = cosineSimilarity(queryVector, stored.embedding)
-            guard score >= minScore else { return nil }
+            guard score >= effectiveMinScore else { return nil }
             return RetrievalResult(stored: stored, score: score)
         }
 

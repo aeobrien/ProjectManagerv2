@@ -8,6 +8,7 @@ public enum KBContentType: String, Sendable, Codable {
     case document
     case taskNotes
     case conversationMessage
+    case sourceCode
 }
 
 /// A text chunk with metadata, ready for embedding.

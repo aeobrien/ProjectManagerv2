@@ -16,6 +16,7 @@ public struct V2ContextConfiguration: Sendable {
             case patternsAndObservations
             case activeSessionContext
             case portfolioSummary
+            case codebaseContext
         }
 
         public let kind: Kind
@@ -75,10 +76,11 @@ public struct V2ContextConfiguration: Sendable {
         components: [
             Component(kind: .projectOverview, priority: 1),
             Component(kind: .sessionSummaries, priority: 2),
-            Component(kind: .documents, priority: 3),
+            Component(kind: .documents, priority: 2),
+            Component(kind: .codebaseContext, priority: 3),
             Component(kind: .projectStructure, priority: 4),
         ],
-        tokenBudget: 2000,
+        tokenBudget: 28000,
         fullSummaryCount: 1,
         condensedSummaryCount: 2
     )
@@ -88,10 +90,11 @@ public struct V2ContextConfiguration: Sendable {
         components: [
             Component(kind: .projectOverview, priority: 1),
             Component(kind: .processProfile, priority: 1),
+            Component(kind: .documents, priority: 1),
             Component(kind: .sessionSummaries, priority: 2),
-            Component(kind: .documents, priority: 2),
+            Component(kind: .codebaseContext, priority: 4),
         ],
-        tokenBudget: 3000,
+        tokenBudget: 32000,
         fullSummaryCount: 2,
         condensedSummaryCount: 2
     )
@@ -104,8 +107,11 @@ public struct V2ContextConfiguration: Sendable {
             Component(kind: .documents, priority: 1),
             Component(kind: .sessionSummaries, priority: 2),
             Component(kind: .projectStructure, priority: 2),
+            Component(kind: .frequentlyDeferred, priority: 2),
+            Component(kind: .estimateCalibration, priority: 3),
+            Component(kind: .codebaseContext, priority: 3),
         ],
-        tokenBudget: 4000,
+        tokenBudget: 32000,
         fullSummaryCount: 2,
         condensedSummaryCount: 3
     )
@@ -118,11 +124,12 @@ public struct V2ContextConfiguration: Sendable {
                 subMode: .projectReview,
                 components: [
                     Component(kind: .portfolioSummary, priority: 1),
-                    Component(kind: .patternsAndObservations, priority: 2),
+                    Component(kind: .patternsAndObservations, priority: 1),
                     Component(kind: .sessionSummaries, priority: 2),
+                    Component(kind: .frequentlyDeferred, priority: 2),
                 ],
-                tokenBudget: 3000,
-                fullSummaryCount: 1,
+                tokenBudget: 24000,
+                fullSummaryCount: 2,
                 condensedSummaryCount: 3
             )
         case .retrospective:
@@ -135,28 +142,47 @@ public struct V2ContextConfiguration: Sendable {
                     Component(kind: .documents, priority: 2),
                     Component(kind: .sessionSummaries, priority: 1),
                     Component(kind: .projectStructure, priority: 2),
-                    Component(kind: .patternsAndObservations, priority: 2),
+                    Component(kind: .patternsAndObservations, priority: 1),
                 ],
-                tokenBudget: 5000,
+                tokenBudget: 30000,
                 fullSummaryCount: 3,
                 condensedSummaryCount: 5
             )
+        case .returnBriefing:
+            // Return briefing needs broad context to re-orient the user
+            return V2ContextConfiguration(
+                mode: .executionSupport,
+                subMode: .returnBriefing,
+                components: [
+                    Component(kind: .projectOverview, priority: 1),
+                    Component(kind: .processProfile, priority: 1),
+                    Component(kind: .sessionSummaries, priority: 1),
+                    Component(kind: .projectStructure, priority: 1),
+                    Component(kind: .documents, priority: 2),
+                    Component(kind: .patternsAndObservations, priority: 2),
+                    Component(kind: .codebaseContext, priority: 3),
+                ],
+                tokenBudget: 32000,
+                fullSummaryCount: 3,
+                condensedSummaryCount: 4
+            )
         default:
-            // Check-in and return briefing use the same configuration
+            // Check-in: focused on progress tracking and current state
             return V2ContextConfiguration(
                 mode: .executionSupport,
                 subMode: subMode,
                 components: [
                     Component(kind: .projectOverview, priority: 1),
-                    Component(kind: .processProfile, priority: 2),
-                    Component(kind: .documents, priority: 3),
+                    Component(kind: .processProfile, priority: 1),
                     Component(kind: .sessionSummaries, priority: 1),
                     Component(kind: .projectStructure, priority: 2),
                     Component(kind: .frequentlyDeferred, priority: 2),
+                    Component(kind: .documents, priority: 3),
                     Component(kind: .estimateCalibration, priority: 3),
                     Component(kind: .patternsAndObservations, priority: 2),
+                    Component(kind: .codebaseContext, priority: 3),
                 ],
-                tokenBudget: 5000,
+                tokenBudget: 32000,
                 fullSummaryCount: 3,
                 condensedSummaryCount: 3
             )

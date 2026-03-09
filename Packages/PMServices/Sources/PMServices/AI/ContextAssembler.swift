@@ -1,16 +1,69 @@
 import Foundation
 import PMDomain
 
+/// Details about context truncation that occurred during assembly.
+public struct ContextTruncationInfo: Sendable, Equatable {
+    /// Names of context sections that were dropped entirely to fit the token budget.
+    public let droppedSections: [String]
+    /// Names of context sections that were truncated (partially included).
+    public let truncatedSections: [String]
+    /// Number of conversation history messages that were dropped.
+    public let droppedHistoryMessages: Int
+    /// The Layer 3 token budget that was applied.
+    public let layer3Budget: Int
+    /// Estimated tokens of Layer 3 context before truncation.
+    public let layer3TokensBeforeTruncation: Int
+    /// Whether any truncation occurred.
+    public var wasTruncated: Bool {
+        !droppedSections.isEmpty || !truncatedSections.isEmpty || droppedHistoryMessages > 0
+    }
+    /// Human-readable summary of what was truncated.
+    public var summary: String {
+        var parts: [String] = []
+        if !droppedSections.isEmpty {
+            parts.append("Dropped: \(droppedSections.joined(separator: ", "))")
+        }
+        if !truncatedSections.isEmpty {
+            parts.append("Truncated: \(truncatedSections.joined(separator: ", "))")
+        }
+        if droppedHistoryMessages > 0 {
+            parts.append("\(droppedHistoryMessages) earlier message(s) omitted")
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    public init(
+        droppedSections: [String] = [],
+        truncatedSections: [String] = [],
+        droppedHistoryMessages: Int = 0,
+        layer3Budget: Int = 0,
+        layer3TokensBeforeTruncation: Int = 0
+    ) {
+        self.droppedSections = droppedSections
+        self.truncatedSections = truncatedSections
+        self.droppedHistoryMessages = droppedHistoryMessages
+        self.layer3Budget = layer3Budget
+        self.layer3TokensBeforeTruncation = layer3TokensBeforeTruncation
+    }
+}
+
 /// A context payload assembled for an AI conversation.
 public struct ContextPayload: Sendable {
     public let systemPrompt: String
     public let messages: [LLMMessage]
     public let estimatedTokens: Int
+    public let truncationInfo: ContextTruncationInfo
 
-    public init(systemPrompt: String, messages: [LLMMessage], estimatedTokens: Int) {
+    public init(
+        systemPrompt: String,
+        messages: [LLMMessage],
+        estimatedTokens: Int,
+        truncationInfo: ContextTruncationInfo = ContextTruncationInfo()
+    ) {
         self.systemPrompt = systemPrompt
         self.messages = messages
         self.estimatedTokens = estimatedTokens
+        self.truncationInfo = truncationInfo
     }
 }
 

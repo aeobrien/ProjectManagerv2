@@ -108,6 +108,48 @@ public struct ProjectBrowserView: View {
     // MARK: - Filter Bar
 
     private var filterBar: some View {
+        #if os(iOS)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(
+                    label: "All",
+                    isSelected: viewModel.selectedLifecycleFilter == .all
+                ) {
+                    viewModel.selectedLifecycleFilter = .all
+                }
+
+                ForEach(LifecycleState.allCases, id: \.self) { state in
+                    FilterChip(
+                        label: state.rawValue.capitalized,
+                        isSelected: viewModel.selectedLifecycleFilter == .state(state),
+                        tint: state.color
+                    ) {
+                        viewModel.selectedLifecycleFilter = .state(state)
+                    }
+                }
+
+                Divider().frame(height: 20)
+
+                Menu {
+                    Button("All Categories") {
+                        viewModel.selectedCategoryId = nil
+                    }
+                    Divider()
+                    ForEach(viewModel.categories) { category in
+                        Button(category.name) {
+                            viewModel.selectedCategoryId = category.id
+                        }
+                    }
+                } label: {
+                    Label(selectedCategoryLabel, systemImage: "folder")
+                        .font(.caption)
+                }
+            }
+            .fixedSize()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        #else
         HStack(spacing: 8) {
             // Lifecycle filters
             FilterChip(
@@ -149,6 +191,7 @@ public struct ProjectBrowserView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+        #endif
     }
 
     private var selectedCategoryLabel: String {
@@ -201,7 +244,8 @@ public struct ProjectBrowserView: View {
                     } label: {
                         ProjectRowView(
                             project: project,
-                            categoryName: viewModel.categoryName(for: project)
+                            categoryName: viewModel.categoryName(for: project),
+                            completedModes: viewModel.completedModes[project.id] ?? []
                         )
                     }
                     .buttonStyle(.plain)
@@ -303,6 +347,7 @@ struct FilterChip: View {
 struct ProjectRowView: View {
     let project: Project
     let categoryName: String
+    var completedModes: Set<SessionMode> = []
 
     var body: some View {
         HStack(spacing: 12) {
@@ -331,6 +376,10 @@ struct ProjectRowView: View {
                     Text(categoryName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if !completedModes.isEmpty {
+                        AIProgressIndicator(completedModes: completedModes)
+                    }
 
                     Text("·")
                         .foregroundStyle(.quaternary)
@@ -434,6 +483,27 @@ struct StateTransitionSheet: View {
         #if os(macOS)
         .frame(minWidth: 400, minHeight: 300)
         #endif
+    }
+}
+
+// MARK: - AI Progress Indicator
+
+struct AIProgressIndicator: View {
+    let completedModes: Set<SessionMode>
+
+    private let stages: [(SessionMode, String)] = [
+        (.exploration, "E"), (.definition, "D"), (.planning, "P")
+    ]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(stages, id: \.0) { mode, _ in
+                Circle()
+                    .fill(completedModes.contains(mode) ? Color.blue : Color.secondary.opacity(0.3))
+                    .frame(width: 6, height: 6)
+                    .help("\(mode.displayName): \(completedModes.contains(mode) ? "Done" : "Not started")")
+            }
+        }
     }
 }
 
