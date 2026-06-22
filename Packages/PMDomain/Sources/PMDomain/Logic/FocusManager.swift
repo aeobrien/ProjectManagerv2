@@ -17,10 +17,10 @@ public struct FocusManager: Sendable {
     public static let maxPerCategory = 2
 
     /// Default number of visible tasks per project on the Focus Board.
-    public static let defaultMaxVisibleTasks = 3
+    public static let defaultMaxVisibleTasks = 8
 
     /// Valid range for user-configurable maxVisibleTasksPerProject.
-    public static let visibleTasksRange = 1...10
+    public static let visibleTasksRange = 1...20
 
     // MARK: - Slot Management
 

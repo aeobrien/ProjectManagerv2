@@ -257,21 +257,30 @@ public final class ConversationManager: Sendable {
 
     // MARK: - Step 5: Session Completion
 
-    /// Complete a session, generating a summary.
+    /// Complete a session with two-phase resilience:
+    /// 1. Transition to .completedPendingSummary (safe checkpoint)
+    /// 2. Generate summary
+    /// 3. Transition to .completed on success; leave as .completedPendingSummary on failure
     public func completeSession(
         _ sessionId: UUID,
         completionStatus: SessionCompletionStatus = .completed
     ) async throws -> SessionSummary {
-        // Transition to completed
-        _ = try await lifecycleManager.transitionSession(sessionId, to: .completed)
+        // Phase 1: Mark as completed-pending-summary (safe even if network drops)
+        _ = try await lifecycleManager.transitionSession(sessionId, to: .completedPendingSummary)
 
-        // Generate summary
-        let summary = try await summaryService.generateSummary(
-            for: sessionId,
-            completionStatus: completionStatus
-        )
-
-        return summary
+        // Phase 2: Generate summary
+        do {
+            let summary = try await summaryService.generateSummary(
+                for: sessionId,
+                completionStatus: completionStatus
+            )
+            // Phase 3: Finalize to .completed
+            _ = try await lifecycleManager.transitionSession(sessionId, to: .completed)
+            return summary
+        } catch {
+            Log.ai.error("Summary generation failed for session \(sessionId), leaving as completedPendingSummary: \(error)")
+            throw error
+        }
     }
 
     /// Pause a session (can be resumed later or auto-summarised).
@@ -280,17 +289,65 @@ public final class ConversationManager: Sendable {
     }
 
     /// End a session without completing it (user manually ended).
+    /// Uses two-phase completion for resilience.
     public func endSession(
         _ sessionId: UUID
     ) async throws -> SessionSummary {
-        _ = try await lifecycleManager.transitionSession(sessionId, to: .completed)
+        _ = try await lifecycleManager.transitionSession(sessionId, to: .completedPendingSummary)
 
-        let summary = try await summaryService.generateSummary(
-            for: sessionId,
-            completionStatus: .incompleteUserEnded
+        do {
+            let summary = try await summaryService.generateSummary(
+                for: sessionId,
+                completionStatus: .incompleteUserEnded
+            )
+            _ = try await lifecycleManager.transitionSession(sessionId, to: .completed)
+            return summary
+        } catch {
+            Log.ai.error("Summary generation failed for ended session \(sessionId), leaving as completedPendingSummary: \(error)")
+            throw error
+        }
+    }
+
+    /// Retry summary generation for sessions stuck in .completedPendingSummary.
+    /// Returns the number of sessions successfully recovered.
+    public func retryPendingSummaries() async throws -> Int {
+        let pending = try await sessionRepo.fetchSessionsWithStatus(.completedPendingSummary)
+        guard !pending.isEmpty else { return 0 }
+
+        Log.ai.info("Retrying summary generation for \(pending.count) pending session(s)")
+        var recovered = 0
+
+        for session in pending {
+            do {
+                _ = try await summaryService.generateSummary(
+                    for: session.id,
+                    completionStatus: .completed
+                )
+                _ = try await lifecycleManager.transitionSession(session.id, to: .completed)
+                recovered += 1
+                Log.ai.info("Recovered pending summary for session \(session.id)")
+            } catch {
+                Log.ai.error("Retry failed for session \(session.id): \(error)")
+            }
+        }
+
+        return recovered
+    }
+
+    // MARK: - Action Feedback
+
+    /// Record a system note in the session's conversation history.
+    /// Used after action execution to inform the AI about created entity IDs
+    /// so it can reference them correctly in subsequent turns.
+    public func recordActionFeedback(
+        sessionId: UUID,
+        content: String
+    ) async throws {
+        _ = try await lifecycleManager.addMessage(
+            to: sessionId,
+            role: .user,
+            content: "[System] \(content)"
         )
-
-        return summary
     }
 
     // MARK: - Conversation History

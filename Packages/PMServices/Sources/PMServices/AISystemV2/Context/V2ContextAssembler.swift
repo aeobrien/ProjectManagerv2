@@ -206,6 +206,8 @@ public struct V2ContextAssembler: Sendable {
 
         let totalTokens = messages.reduce(0) { $0 + Self.estimateTokens($1.content) }
 
+        Log.ai.info("Payload assembly: system=\(systemTokens)t, history=\(historyMessages.count) msgs (\(droppedHistoryCount) dropped), total=\(totalTokens)t, budget=\(self.totalBudget)t")
+
         let truncationInfo = ContextTruncationInfo(
             droppedSections: layer3Result.droppedSections,
             truncatedSections: layer3Result.truncatedSections,
@@ -292,7 +294,10 @@ public struct V2ContextAssembler: Sendable {
             }
         }
 
-        guard let content, !content.isEmpty else { return nil }
+        guard let content, !content.isEmpty else {
+            Log.ai.debug("Context component '\(component.kind.rawValue)' produced no content")
+            return nil
+        }
         return PrioritisedSection(label: component.kind.rawValue, priority: component.priority, content: content)
     }
 
@@ -302,7 +307,12 @@ public struct V2ContextAssembler: Sendable {
         let tokensBeforeTruncation = sections.reduce(0) { $0 + $1.tokens }
         var totalTokens = tokensBeforeTruncation
 
+        // Always log section breakdown for diagnostics
+        let sectionSummary = sections.map { "\($0.label)=\($0.tokens)t(p\($0.priority))" }.joined(separator: ", ")
+        Log.ai.info("Context assembly: \(totalTokens)/\(budget) tokens — [\(sectionSummary)]")
+
         if totalTokens <= budget {
+            Log.ai.info("Context assembly: all sections fit within budget")
             return Layer3Result(
                 content: sections.map(\.content).joined(separator: "\n\n"),
                 droppedSections: [],
@@ -312,6 +322,8 @@ public struct V2ContextAssembler: Sendable {
             )
         }
 
+        Log.ai.notice("Context assembly: \(totalTokens) tokens exceeds budget of \(budget), truncating")
+
         // Phase 1: Drop entire sections from lowest priority (highest number) until within budget
         var includedSections = sections
         var droppedSections: [String] = []
@@ -319,7 +331,7 @@ public struct V2ContextAssembler: Sendable {
             // Find the lowest-priority section (highest priority number)
             if let maxIdx = includedSections.indices.max(by: { includedSections[$0].priority < includedSections[$1].priority }) {
                 let dropped = includedSections[maxIdx]
-                Log.ai.info("Context budget: dropping '\(dropped.label)' (priority \(dropped.priority), \(dropped.tokens) tokens) — \(totalTokens)/\(budget) tokens")
+                Log.ai.notice("Context budget: dropping '\(dropped.label)' (priority \(dropped.priority), \(dropped.tokens) tokens) — \(totalTokens)/\(budget) tokens")
                 droppedSections.append(dropped.label)
                 totalTokens -= dropped.tokens
                 includedSections.remove(at: maxIdx)
@@ -345,8 +357,20 @@ public struct V2ContextAssembler: Sendable {
             )
         }
 
+        // Append a diagnostic note so the AI knows what context was dropped
+        var contextNote = "\n\n[CONTEXT NOTE: Token budget was \(budget). "
+        if !droppedSections.isEmpty {
+            contextNote += "Dropped sections: \(droppedSections.joined(separator: ", ")). "
+        }
+        if !truncatedSections.isEmpty {
+            contextNote += "Truncated sections: \(truncatedSections.joined(separator: ", ")). "
+        }
+        contextNote += "If you need data from a dropped section, tell the user.]"
+
+        let assembled = includedSections.map(\.content).joined(separator: "\n\n") + contextNote
+
         return Layer3Result(
-            content: includedSections.map(\.content).joined(separator: "\n\n"),
+            content: assembled,
             droppedSections: droppedSections,
             truncatedSections: truncatedSections,
             budget: budget,
@@ -415,7 +439,7 @@ public struct V2ContextAssembler: Sendable {
         // High char limit: users add these specifically to inform AI sessions.
         for doc in nonEmptyDocuments {
             lines.append("")
-            lines.append("[\(doc.type.rawValue): \(doc.title)]")
+            lines.append("[\(doc.type.rawValue): \(doc.title)] [id: \(doc.id.uuidString)]")
             let maxChars = 25000
             if doc.content.count > maxChars {
                 let truncated = String(doc.content.prefix(maxChars))
@@ -429,7 +453,7 @@ public struct V2ContextAssembler: Sendable {
         // Deliverables (AI-produced artifacts)
         for doc in completedDeliverables {
             lines.append("")
-            lines.append("[\(doc.type.rawValue): \(doc.title)]")
+            lines.append("[\(doc.type.rawValue): \(doc.title)] [id: \(doc.id.uuidString)]")
             let maxChars = 8000
             if doc.content.count > maxChars {
                 let truncated = String(doc.content.prefix(maxChars))
@@ -536,10 +560,10 @@ public struct V2ContextAssembler: Sendable {
         var lines: [String] = ["CURRENT STRUCTURE:"]
 
         for phase in data.phases {
-            lines.append("PHASE: \(phase.name) (\(phase.status.rawValue))")
+            lines.append("PHASE: \(phase.name) (\(phase.status.rawValue)) [id: \(phase.id.uuidString)]")
             let phaseMilestones = milestonesForPhase[phase.id] ?? []
             for ms in phaseMilestones {
-                var msLine = "  MILESTONE: \(ms.name) (\(ms.status.rawValue))"
+                var msLine = "  MILESTONE: \(ms.name) (\(ms.status.rawValue)) [id: \(ms.id.uuidString)]"
                 if let deadline = ms.deadline {
                     msLine += " due: \(dateFormatter.string(from: deadline))"
                 }
@@ -547,7 +571,7 @@ public struct V2ContextAssembler: Sendable {
 
                 let msTasks = tasksByMilestone[ms.id] ?? []
                 for task in msTasks {
-                    var taskLine = "    TASK: \(task.name) (\(task.status.rawValue))"
+                    var taskLine = "    TASK: \(task.name) (\(task.status.rawValue)) [id: \(task.id.uuidString)]"
                     if task.priority == .high { taskLine += " [HIGH]" }
                     if let effort = task.effortType { taskLine += " [\(effort.rawValue)]" }
                     if let blocked = task.blockedType {
@@ -561,7 +585,7 @@ public struct V2ContextAssembler: Sendable {
                     if let subtasks = data.subtasksByTaskId[task.id] {
                         for subtask in subtasks {
                             let check = subtask.isCompleted ? "x" : " "
-                            lines.append("      [\(check)] \(subtask.name)")
+                            lines.append("      [\(check)] \(subtask.name) [id: \(subtask.id.uuidString)]")
                         }
                     }
                 }

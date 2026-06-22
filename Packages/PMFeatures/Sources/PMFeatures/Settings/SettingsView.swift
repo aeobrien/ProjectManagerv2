@@ -486,12 +486,22 @@ public struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
 
-                    Button {
-                        Task { await syncManager.syncNow() }
-                    } label: {
-                        Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                    HStack {
+                        Button {
+                            Task { await syncManager.syncNow() }
+                        } label: {
+                            Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(!settings.syncEnabled || syncManager.isSyncing)
+
+                        Button {
+                            Task { await syncManager.forceFullSync() }
+                        } label: {
+                            Label("Force Full Sync", systemImage: "arrow.clockwise.icloud")
+                        }
+                        .disabled(!settings.syncEnabled || syncManager.isSyncing)
+                        .help("Re-uploads all local data. Use if data created before sync was enabled.")
                     }
-                    .disabled(!settings.syncEnabled || syncManager.isSyncing)
                 }
             }
         }

@@ -12,6 +12,7 @@ public protocol SessionRepositoryProtocol: Sendable {
     // Messages
     func fetchMessages(forSession sessionId: UUID) async throws -> [SessionMessage]
     func appendMessage(_ message: SessionMessage) async throws
+    func replaceMessages(forSession sessionId: UUID, with messages: [SessionMessage]) async throws
 
     // Summaries
     func fetchSummary(forSession sessionId: UUID) async throws -> SessionSummary?

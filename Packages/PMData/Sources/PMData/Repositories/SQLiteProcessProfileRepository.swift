@@ -7,6 +7,12 @@ public final class SQLiteProcessProfileRepository: ProcessProfileRepositoryProto
 
     public init(db: DatabaseQueue) { self.db = db }
 
+    public func fetch(id: UUID) async throws -> ProcessProfile? {
+        try await db.read { db in
+            try ProcessProfile.fetchOne(db, key: id)
+        }
+    }
+
     public func fetch(forProject projectId: UUID) async throws -> ProcessProfile? {
         try await db.read { db in
             try ProcessProfile
@@ -18,6 +24,12 @@ public final class SQLiteProcessProfileRepository: ProcessProfileRepositoryProto
     public func save(_ profile: ProcessProfile) async throws {
         try await db.write { db in
             try profile.save(db)
+        }
+    }
+
+    public func delete(id: UUID) async throws {
+        _ = try await db.write { db in
+            try ProcessProfile.deleteOne(db, key: id)
         }
     }
 

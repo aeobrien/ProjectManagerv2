@@ -68,7 +68,7 @@ struct iOSContentView: View {
                 } aiChat: {
                     ChatView(viewModel: chatVM)
                 } quickCapture: {
-                    QuickCaptureView(viewModel: quickCaptureVM, voiceManager: voiceManager)
+                    QuickCaptureView(viewModel: quickCaptureVM, voiceManager: voiceManager, isEmbedded: true)
                 } more: {
                     List {
                         if let crossProjectRoadmapVM {
@@ -170,7 +170,7 @@ struct iOSContentView: View {
             let adversarialVM: AdversarialReviewManager? = documentRepo.map { docRepo in
                 AdversarialReviewManager(documentRepo: docRepo, llmClient: LLMClient())
             }
-            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM)
+            ProjectDetailView(viewModel: detailVM, roadmapViewModel: roadmapVM, documentViewModel: docVM, analyticsViewModel: analyticsVM, adversarialReviewManager: adversarialVM, sessionRepo: sessionRepo, codebaseRepo: codebaseRepo, syncManager: syncManager)
         }
     }
 
@@ -187,6 +187,16 @@ struct iOSContentView: View {
         let promptComposer = PromptComposer()
         let contextAssembler = V2ContextAssembler()
 
+        // Wire session change tracking into sync
+        if let syncMgr = syncManager {
+            lifecycleManager.onSessionChanged = { sessionId, changeType in
+                guard let syncChange = SyncChangeType(rawValue: changeType) else { return }
+                Task { @MainActor in
+                    syncMgr.trackChange(entityType: .session, entityId: sessionId, changeType: syncChange)
+                }
+            }
+        }
+
         let conversationManager = ConversationManager(
             llmClient: llmClient,
             sessionRepo: sessionRepo,
@@ -196,7 +206,7 @@ struct iOSContentView: View {
             contextAssembler: contextAssembler
         )
 
-        return AIDevScreenViewModel(
+        let vm = AIDevScreenViewModel(
             projectRepo: projectRepo,
             phaseRepo: phaseRepo,
             milestoneRepo: milestoneRepo,
@@ -210,6 +220,8 @@ struct iOSContentView: View {
             documentRepo: documentRepo,
             codebaseRepo: codebaseRepo
         )
+        vm.syncManager = syncManager
+        return vm
     }
 
     @ViewBuilder
@@ -298,7 +310,12 @@ struct iOSContentView: View {
                 documentRepo: documentRepo,
                 categoryRepo: categoryRepo,
                 conversationRepo: conversationRepo,
-                dependencyRepo: dependencyRepo
+                dependencyRepo: dependencyRepo,
+                sessionRepo: sessionRepo,
+                deliverableRepo: deliverableRepo,
+                processProfileRepo: processProfileRepo,
+                codebaseRepo: codebaseRepo,
+                documentVersionRepo: documentVersionRepo
             )
             let syncBackend = CloudKitSyncBackend(containerIdentifier: "iCloud.com.aeobrien.projectmanager")
             let syncQueue = SQLiteSyncQueue(dbQueue: db.dbQueue)

@@ -108,14 +108,18 @@ struct SessionLifecycleManagerTests {
         }
     }
 
-    @Test("Transition to terminal state sets completedAt")
+    @Test("Transition to terminal state sets completedAt (two-phase)")
     func terminalSetsCompletedAt() async throws {
         let mgr = manager
         let session = TestFixtures.session(status: .active)
         await { mockRepo.sessions[session.id] = session }()
 
-        let updated = try await mgr.transitionSession(session.id, to: .completed)
+        // Phase 1: active → completedPendingSummary (not terminal, no completedAt)
+        let pending = try await mgr.transitionSession(session.id, to: .completedPendingSummary)
+        #expect(pending.completedAt == nil)
 
+        // Phase 2: completedPendingSummary → completed (terminal, sets completedAt)
+        let updated = try await mgr.transitionSession(session.id, to: .completed)
         #expect(updated.completedAt != nil)
     }
 

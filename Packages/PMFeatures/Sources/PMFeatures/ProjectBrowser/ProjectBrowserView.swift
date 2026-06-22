@@ -239,6 +239,18 @@ public struct ProjectBrowserView: View {
                 }
             } else {
                 List(viewModel.filteredProjects) { project in
+                    #if os(iOS)
+                    NavigationLink(value: project) {
+                        ProjectRowView(
+                            project: project,
+                            categoryName: viewModel.categoryName(for: project),
+                            completedModes: viewModel.completedModes[project.id] ?? []
+                        )
+                    }
+                    .contextMenu {
+                        projectContextMenu(for: project)
+                    }
+                    #else
                     Button {
                         onSelectProject?(project)
                     } label: {
@@ -252,6 +264,7 @@ public struct ProjectBrowserView: View {
                     .contextMenu {
                         projectContextMenu(for: project)
                     }
+                    #endif
                 }
             }
         }
@@ -377,9 +390,7 @@ struct ProjectRowView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    if !completedModes.isEmpty {
-                        AIProgressIndicator(completedModes: completedModes)
-                    }
+                    AIProgressIndicator(completedModes: completedModes)
 
                     Text("·")
                         .foregroundStyle(.quaternary)

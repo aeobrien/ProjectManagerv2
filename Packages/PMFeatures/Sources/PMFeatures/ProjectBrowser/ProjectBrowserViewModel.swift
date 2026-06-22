@@ -273,7 +273,7 @@ public final class ProjectBrowserViewModel {
         for project in projects {
             let sessions = (try? await sessionRepo.fetchAll(forProject: project.id)) ?? []
             let modes = Set(sessions
-                .filter { $0.status == .completed || $0.status == .autoSummarised }
+                .filter { $0.status == .completed || $0.status == .autoSummarised || $0.status == .completedPendingSummary }
                 .map(\.mode))
             if !modes.isEmpty {
                 result[project.id] = modes

@@ -51,7 +51,7 @@ struct SyncRecordTests {
     @Test("SyncEntityType all cases")
     func entityTypes() {
         let types = SyncEntityType.allCases
-        #expect(types.count == 10)
+        #expect(types.count == 15)
         #expect(types.contains(.project))
         #expect(types.contains(.phase))
         #expect(types.contains(.milestone))
@@ -62,6 +62,11 @@ struct SyncRecordTests {
         #expect(types.contains(.category))
         #expect(types.contains(.conversation))
         #expect(types.contains(.dependency))
+        #expect(types.contains(.session))
+        #expect(types.contains(.deliverable))
+        #expect(types.contains(.processProfile))
+        #expect(types.contains(.codebase))
+        #expect(types.contains(.documentVersion))
     }
 
     @Test("SyncChangeType raw values")

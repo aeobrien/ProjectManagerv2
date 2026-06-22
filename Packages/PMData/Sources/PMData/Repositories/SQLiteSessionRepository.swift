@@ -68,6 +68,17 @@ public final class SQLiteSessionRepository: SessionRepositoryProtocol, Sendable 
         }
     }
 
+    public func replaceMessages(forSession sessionId: UUID, with messages: [SessionMessage]) async throws {
+        try await db.write { db in
+            try SessionMessage
+                .filter(Column("sessionId") == sessionId)
+                .deleteAll(db)
+            for message in messages {
+                try message.insert(db)
+            }
+        }
+    }
+
     // MARK: - Summaries
 
     public func fetchSummary(forSession sessionId: UUID) async throws -> SessionSummary? {

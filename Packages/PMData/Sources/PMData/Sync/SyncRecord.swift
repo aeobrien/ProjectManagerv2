@@ -38,6 +38,11 @@ public enum SyncEntityType: String, Sendable, Codable, CaseIterable {
     case category
     case conversation
     case dependency
+    case session
+    case deliverable
+    case processProfile
+    case codebase
+    case documentVersion
 }
 
 /// Types of changes to sync.

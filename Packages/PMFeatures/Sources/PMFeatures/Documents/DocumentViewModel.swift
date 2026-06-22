@@ -173,6 +173,7 @@ public final class DocumentViewModel {
             // Save the version snapshot
             if let versionRepo {
                 try await versionRepo.save(snapshot)
+                syncManager?.trackChange(entityType: .documentVersion, entityId: snapshot.id, changeType: .create)
             }
 
             try await documentRepo.save(doc)

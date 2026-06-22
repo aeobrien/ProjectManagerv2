@@ -7,19 +7,26 @@ public enum AIAction: Sendable, Equatable {
     case completeTask(taskId: UUID)
     case moveTask(taskId: UUID, column: KanbanColumn)
     case completeSubtask(subtaskId: UUID)
-    case updateNotes(projectId: UUID, notes: String)
     case flagBlocked(taskId: UUID, blockedType: BlockedType, reason: String)
     case setWaiting(taskId: UUID, reason: String, checkBackDate: Date?)
     case createSubtask(taskId: UUID, name: String)
     case updateDocument(documentId: UUID, content: String)
     case incrementDeferred(taskId: UUID)
     case suggestScopeReduction(projectId: UUID, suggestion: String)
-    case createMilestone(phaseId: UUID, name: String)
-    case createTask(milestoneId: UUID, name: String, priority: Priority, effortType: EffortType?)
+    case createMilestone(phaseId: UUID, name: String, deadline: Date?)
+    case createTask(milestoneId: UUID, name: String, priority: Priority, effortType: EffortType?, deadline: Date?)
     case createDocument(projectId: UUID, title: String, content: String)
     case createPhase(projectId: UUID, name: String)
     case deleteTask(taskId: UUID)
     case deleteSubtask(subtaskId: UUID)
+    case deleteMilestone(milestoneId: UUID)
+    case deletePhase(phaseId: UUID)
+    case editDocumentSection(documentIdentifier: String, section: String, newContent: String)
+    case updateProject(projectId: UUID, fields: [String: String])
+    case updatePhase(phaseId: UUID, fields: [String: String])
+    case updateMilestone(milestoneId: UUID, fields: [String: String])
+    case updateTask(taskId: UUID, fields: [String: String])
+    case updateSubtask(subtaskId: UUID, fields: [String: String])
 
     /// Human-readable list of all AI capabilities for display in the UI.
     public static let capabilitiesList: [(action: String, description: String, isMajor: Bool)] = [
@@ -29,12 +36,19 @@ public enum AIAction: Sendable, Equatable {
         ("Create Subtask", "Add a new subtask to an existing task", false),
         ("Delete Task", "Permanently delete a task", true),
         ("Delete Subtask", "Permanently delete a subtask", true),
+        ("Delete Milestone", "Permanently delete a milestone and its tasks", true),
+        ("Delete Phase", "Permanently delete a phase and its milestones", true),
         ("Create Phase", "Create a new phase within a project", true),
         ("Create Milestone", "Create a new milestone within a phase", true),
         ("Create Task", "Create a new task within a milestone", true),
         ("Create Document", "Create a new project document", true),
-        ("Update Notes", "Update a project's notes", true),
+        ("Update Project", "Modify project fields (name, state, notes, etc.)", true),
+        ("Update Phase", "Modify phase fields (name, status, etc.)", true),
+        ("Update Milestone", "Modify milestone fields (name, deadline, priority, etc.)", true),
+        ("Update Task", "Modify task fields (name, deadline, priority, status, etc.)", true),
+        ("Update Subtask", "Modify subtask fields (name, completion, etc.)", true),
         ("Update Document", "Modify an existing document's content", true),
+        ("Edit Document Section", "Replace a single section within a document", true),
         ("Flag Blocked", "Mark a task as blocked with a reason", true),
         ("Set Waiting", "Mark a task as waiting on something", true),
         ("Increment Deferred", "Track that a task was deferred again", false),
@@ -49,9 +63,11 @@ public enum AIAction: Sendable, Equatable {
         case .completeTask, .moveTask, .completeSubtask, .createSubtask,
              .incrementDeferred, .suggestScopeReduction:
             return false
-        case .updateNotes, .flagBlocked, .setWaiting, .updateDocument,
+        case .flagBlocked, .setWaiting, .updateDocument,
              .createPhase, .createMilestone, .createTask, .createDocument,
-             .deleteTask, .deleteSubtask:
+             .deleteTask, .deleteSubtask, .deleteMilestone, .deletePhase,
+             .editDocumentSection,
+             .updateProject, .updatePhase, .updateMilestone, .updateTask, .updateSubtask:
             return true
         }
     }
@@ -142,10 +158,11 @@ public struct ActionParser: Sendable {
             guard let subtaskId = params["subtaskId"].flatMap(UUID.init) else { return nil }
             return .completeSubtask(subtaskId: subtaskId)
 
+        // Backward compat: translate UPDATE_NOTES → updateProject
         case "UPDATE_NOTES":
             guard let projectId = params["projectId"].flatMap(UUID.init),
                   let notes = params["notes"] else { return nil }
-            return .updateNotes(projectId: projectId, notes: notes)
+            return .updateProject(projectId: projectId, fields: ["notes": notes])
 
         case "FLAG_BLOCKED":
             guard let taskId = params["taskId"].flatMap(UUID.init),
@@ -187,14 +204,16 @@ public struct ActionParser: Sendable {
         case "CREATE_MILESTONE":
             guard let name = params["name"] else { return nil }
             let phaseId = resolveId(params["phaseId"])
-            return .createMilestone(phaseId: phaseId, name: name)
+            let deadline = params["deadline"].flatMap { dateFromString($0) }
+            return .createMilestone(phaseId: phaseId, name: name, deadline: deadline)
 
         case "CREATE_TASK":
             guard let name = params["name"] else { return nil }
             let milestoneId = resolveId(params["milestoneId"])
             let priority = params["priority"].flatMap { Priority(rawValue: $0) } ?? .normal
             let effortType = params["effortType"].flatMap { EffortType(rawValue: $0) }
-            return .createTask(milestoneId: milestoneId, name: name, priority: priority, effortType: effortType)
+            let deadline = params["deadline"].flatMap { dateFromString($0) }
+            return .createTask(milestoneId: milestoneId, name: name, priority: priority, effortType: effortType, deadline: deadline)
 
         case "CREATE_DOCUMENT":
             guard let title = params["title"],
@@ -209,6 +228,86 @@ public struct ActionParser: Sendable {
         case "DELETE_SUBTASK":
             guard let subtaskId = params["subtaskId"].flatMap(UUID.init) else { return nil }
             return .deleteSubtask(subtaskId: subtaskId)
+
+        case "DELETE_MILESTONE":
+            guard let milestoneId = params["milestoneId"].flatMap(UUID.init) else { return nil }
+            return .deleteMilestone(milestoneId: milestoneId)
+
+        case "DELETE_PHASE":
+            guard let phaseId = params["phaseId"].flatMap(UUID.init) else { return nil }
+            return .deletePhase(phaseId: phaseId)
+
+        // Backward compat: translate MOVE_TASK_TO_MILESTONE → updateTask
+        case "MOVE_TASK_TO_MILESTONE":
+            guard let taskId = params["taskId"].flatMap(UUID.init),
+                  let milestoneId = params["milestoneId"] else { return nil }
+            return .updateTask(taskId: taskId, fields: ["milestoneId": milestoneId])
+
+        // Backward compat: translate MOVE_MILESTONE_TO_PHASE → updateMilestone
+        case "MOVE_MILESTONE_TO_PHASE":
+            guard let milestoneId = params["milestoneId"].flatMap(UUID.init),
+                  let phaseId = params["phaseId"] else { return nil }
+            return .updateMilestone(milestoneId: milestoneId, fields: ["phaseId": phaseId])
+
+        // Backward compat: translate SET_DEADLINE → updateTask/updateMilestone
+        case "SET_DEADLINE":
+            guard let entityType = params["entityType"],
+                  let entityId = params["entityId"].flatMap(UUID.init) else { return nil }
+            let deadlineValue = params["deadline"] ?? "none"
+            switch entityType.lowercased() {
+            case "task":
+                return .updateTask(taskId: entityId, fields: ["deadline": deadlineValue])
+            case "milestone":
+                return .updateMilestone(milestoneId: entityId, fields: ["deadline": deadlineValue])
+            default:
+                return nil
+            }
+
+        // Generic update actions
+        case "UPDATE_PROJECT":
+            guard let projectId = params["projectId"].flatMap(UUID.init) else { return nil }
+            var fields = params
+            fields.removeValue(forKey: "projectId")
+            return .updateProject(projectId: projectId, fields: fields)
+
+        case "UPDATE_PHASE":
+            guard let phaseId = params["phaseId"].flatMap(UUID.init) else { return nil }
+            var fields = params
+            fields.removeValue(forKey: "phaseId")
+            return .updatePhase(phaseId: phaseId, fields: fields)
+
+        case "UPDATE_MILESTONE":
+            guard let milestoneId = params["milestoneId"].flatMap(UUID.init) else { return nil }
+            var fields = params
+            fields.removeValue(forKey: "milestoneId")
+            return .updateMilestone(milestoneId: milestoneId, fields: fields)
+
+        case "UPDATE_TASK":
+            guard let taskId = params["taskId"].flatMap(UUID.init) else { return nil }
+            var fields = params
+            fields.removeValue(forKey: "taskId")
+            return .updateTask(taskId: taskId, fields: fields)
+
+        case "UPDATE_SUBTASK":
+            guard let subtaskId = params["subtaskId"].flatMap(UUID.init) else { return nil }
+            var fields = params
+            fields.removeValue(forKey: "subtaskId")
+            return .updateSubtask(subtaskId: subtaskId, fields: fields)
+
+        case "EDIT_DOCUMENT_SECTION":
+            // Extract params only from the portion before <<<CONTENT to avoid
+            // the key-value parser consuming markdown content as param values.
+            let paramBody: String
+            if let delimiterRange = body.range(of: "<<<CONTENT") {
+                paramBody = String(body[body.startIndex..<delimiterRange.lowerBound])
+            } else {
+                paramBody = body
+            }
+            let localParams = parseParams(paramBody)
+            guard let docIdentifier = localParams["documentId"],
+                  let section = localParams["section"],
+                  let newContent = parseDelimitedContent(body) else { return nil }
+            return .editDocumentSection(documentIdentifier: docIdentifier, section: section, newContent: newContent)
 
         default:
             return nil
@@ -242,6 +341,14 @@ public struct ActionParser: Sendable {
     private func resolveId(_ string: String?) -> UUID {
         guard let string else { return UUID() }
         return UUID(uuidString: string) ?? UUID()
+    }
+
+    /// Extract content from a heredoc-style `<<<CONTENT` / `CONTENT` delimiter block.
+    private func parseDelimitedContent(_ body: String) -> String? {
+        guard let startRange = body.range(of: "<<<CONTENT\n"),
+              let endRange = body.range(of: "\nCONTENT", range: startRange.upperBound..<body.endIndex)
+        else { return nil }
+        return String(body[startRange.upperBound..<endRange.lowerBound])
     }
 
     private func dateFromString(_ string: String) -> Date? {

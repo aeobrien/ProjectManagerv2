@@ -34,6 +34,20 @@ public extension ItemStatus {
     var icon: Image { Image(systemName: iconName) }
 }
 
+// MARK: - Phase Status Icons
+
+public extension PhaseStatus {
+    var iconName: String {
+        switch self {
+        case .notStarted: "circle"
+        case .inProgress: "circle.lefthalf.filled"
+        case .completed: "checkmark.circle.fill"
+        }
+    }
+
+    var icon: Image { Image(systemName: iconName) }
+}
+
 // MARK: - Lifecycle State Icons
 
 public extension LifecycleState {

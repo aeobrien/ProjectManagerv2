@@ -48,11 +48,18 @@ final class MockDocumentRepository: DocumentRepositoryProtocol, @unchecked Senda
 
 final class MockDocumentVersionRepository: DocumentVersionRepositoryProtocol, @unchecked Sendable {
     var versions: [DocumentVersion] = []
+    func fetch(id: UUID) async throws -> DocumentVersion? {
+        versions.first { $0.id == id }
+    }
     func fetchAll(forDocument documentId: UUID) async throws -> [DocumentVersion] {
         versions.filter { $0.documentId == documentId }.sorted { $0.version > $1.version }
     }
     func save(_ version: DocumentVersion) async throws {
+        versions.removeAll { $0.id == version.id }
         versions.append(version)
+    }
+    func delete(id: UUID) async throws {
+        versions.removeAll { $0.id == id }
     }
     func deleteAll(forDocument documentId: UUID) async throws {
         versions.removeAll { $0.documentId == documentId }

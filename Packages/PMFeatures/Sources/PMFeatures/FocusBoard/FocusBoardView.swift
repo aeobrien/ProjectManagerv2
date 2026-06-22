@@ -156,6 +156,12 @@ struct ProjectKanbanSection: View {
                         .fill(SlotColour.forIndex(project.focusSlotIndex))
                         .frame(width: 10, height: 10)
 
+                    #if os(iOS)
+                    NavigationLink(value: project) {
+                        Text(project.name)
+                            .font(.headline)
+                    }
+                    #else
                     Button {
                         onSelectProject?(project)
                     } label: {
@@ -163,6 +169,7 @@ struct ProjectKanbanSection: View {
                             .font(.headline)
                     }
                     .buttonStyle(.plain)
+                    #endif
 
                     Text(viewModel.categoryName(for: project))
                         .font(.caption)
@@ -199,19 +206,7 @@ struct ProjectKanbanSection: View {
                 // Three-column Kanban
                 KanbanColumnsRow(project: project, viewModel: viewModel)
 
-                // Show all toggle
-                let totalToDo = viewModel.totalToDoCount(for: project.id)
-                let visibleToDo = viewModel.toDoTasks(for: project.id).count
-                if totalToDo > visibleToDo || viewModel.showAllTasks.contains(project.id) {
-                    Button {
-                        viewModel.toggleShowAll(for: project.id)
-                    } label: {
-                        Text(viewModel.showAllTasks.contains(project.id) ? "Show curated (\(viewModel.maxVisibleTasks))" : "Show all \(totalToDo) tasks")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
-                }
+                // (Per-column show more/less toggles are now inside each kanban column)
             }
         }
         .sheet(isPresented: $showCheckIn) {
@@ -353,7 +348,10 @@ struct KanbanColumnsRow: View {
     }
 
     private func kanbanColumnContent(title: String, tasks: [PMTask], column: KanbanColumn) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let totalToDo = column == .toDo ? viewModel.totalToDoCount(for: project.id) : 0
+        let totalDone = column == .done ? viewModel.totalDoneCount(for: project.id) : 0
+
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
                     .font(.caption)
@@ -391,6 +389,35 @@ struct KanbanColumnsRow: View {
                     .font(.caption2)
                     .foregroundStyle(.quaternary)
                     .frame(maxWidth: .infinity, minHeight: 60)
+            }
+
+            // Per-column show more/less toggle
+            if column == .toDo && totalToDo > tasks.count {
+                Button("Show all \(totalToDo)") {
+                    viewModel.toggleShowAll(for: project.id)
+                }
+                .font(.caption2)
+                .foregroundStyle(.blue)
+            } else if column == .toDo && viewModel.showAllTasks.contains(project.id) && totalToDo > viewModel.maxVisibleTasks {
+                Button("Show less") {
+                    viewModel.toggleShowAll(for: project.id)
+                }
+                .font(.caption2)
+                .foregroundStyle(.blue)
+            }
+
+            if column == .done && totalDone > tasks.count {
+                Button("Show all \(totalDone)") {
+                    viewModel.toggleShowAllDone(for: project.id)
+                }
+                .font(.caption2)
+                .foregroundStyle(.blue)
+            } else if column == .done && viewModel.showAllDone.contains(project.id) && totalDone > viewModel.maxVisibleTasks {
+                Button("Show less") {
+                    viewModel.toggleShowAllDone(for: project.id)
+                }
+                .font(.caption2)
+                .foregroundStyle(.blue)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 80, alignment: .top)

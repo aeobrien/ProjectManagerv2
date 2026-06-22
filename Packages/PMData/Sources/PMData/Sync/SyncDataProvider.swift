@@ -31,6 +31,11 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
     private let categoryRepo: CategoryRepositoryProtocol
     private let conversationRepo: ConversationRepositoryProtocol
     private let dependencyRepo: DependencyRepositoryProtocol
+    private let sessionRepo: SessionRepositoryProtocol
+    private let deliverableRepo: DeliverableRepositoryProtocol
+    private let processProfileRepo: ProcessProfileRepositoryProtocol
+    private let codebaseRepo: CodebaseRepositoryProtocol
+    private let documentVersionRepo: DocumentVersionRepositoryProtocol
 
     private let dbQueue: DatabaseQueue
     private let encoder: JSONEncoder
@@ -47,7 +52,12 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         documentRepo: DocumentRepositoryProtocol,
         categoryRepo: CategoryRepositoryProtocol,
         conversationRepo: ConversationRepositoryProtocol,
-        dependencyRepo: DependencyRepositoryProtocol
+        dependencyRepo: DependencyRepositoryProtocol,
+        sessionRepo: SessionRepositoryProtocol,
+        deliverableRepo: DeliverableRepositoryProtocol,
+        processProfileRepo: ProcessProfileRepositoryProtocol,
+        codebaseRepo: CodebaseRepositoryProtocol,
+        documentVersionRepo: DocumentVersionRepositoryProtocol
     ) {
         self.dbQueue = dbQueue
         self.projectRepo = projectRepo
@@ -60,6 +70,11 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         self.categoryRepo = categoryRepo
         self.conversationRepo = conversationRepo
         self.dependencyRepo = dependencyRepo
+        self.sessionRepo = sessionRepo
+        self.deliverableRepo = deliverableRepo
+        self.processProfileRepo = processProfileRepo
+        self.codebaseRepo = codebaseRepo
+        self.documentVersionRepo = documentVersionRepo
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -104,6 +119,24 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         case .dependency:
             guard let entity = try await dependencyRepo.fetch(id: entityId) else { return nil }
             return try encoder.encode(entity)
+        case .session:
+            guard let session = try await sessionRepo.fetch(id: entityId) else { return nil }
+            let messages = try await sessionRepo.fetchMessages(forSession: entityId)
+            let summary = try await sessionRepo.fetchSummary(forSession: entityId)
+            let payload = SessionSyncPayload(session: session, messages: messages, summary: summary)
+            return try encoder.encode(payload)
+        case .deliverable:
+            guard let entity = try await deliverableRepo.fetch(id: entityId) else { return nil }
+            return try encoder.encode(entity)
+        case .processProfile:
+            guard let entity = try await processProfileRepo.fetch(id: entityId) else { return nil }
+            return try encoder.encode(entity)
+        case .codebase:
+            guard let entity = try await codebaseRepo.fetch(id: entityId) else { return nil }
+            return try encoder.encode(entity)
+        case .documentVersion:
+            guard let entity = try await documentVersionRepo.fetch(id: entityId) else { return nil }
+            return try encoder.encode(entity)
         }
     }
 
@@ -141,6 +174,25 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         case .dependency:
             let entity = try decoder.decode(Dependency.self, from: data)
             try await dependencyRepo.save(entity)
+        case .session:
+            let payload = try decoder.decode(SessionSyncPayload.self, from: data)
+            try await sessionRepo.save(payload.session)
+            try await sessionRepo.replaceMessages(forSession: entityId, with: payload.messages)
+            if let summary = payload.summary {
+                try await sessionRepo.saveSummary(summary)
+            }
+        case .deliverable:
+            let entity = try decoder.decode(Deliverable.self, from: data)
+            try await deliverableRepo.save(entity)
+        case .processProfile:
+            let entity = try decoder.decode(ProcessProfile.self, from: data)
+            try await processProfileRepo.save(entity)
+        case .codebase:
+            let entity = try decoder.decode(Codebase.self, from: data)
+            try await codebaseRepo.save(entity)
+        case .documentVersion:
+            let entity = try decoder.decode(DocumentVersion.self, from: data)
+            try await documentVersionRepo.save(entity)
         }
         Log.data.info("Applied remote \(entityType.rawValue) \(entityId)")
     }
@@ -158,7 +210,12 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         case .document:   try await documentRepo.delete(id: entityId)
         case .category:   try await categoryRepo.delete(id: entityId)
         case .conversation: try await conversationRepo.delete(id: entityId)
-        case .dependency: try await dependencyRepo.delete(id: entityId)
+        case .dependency:        try await dependencyRepo.delete(id: entityId)
+        case .session:           try await sessionRepo.delete(id: entityId)
+        case .deliverable:       try await deliverableRepo.delete(id: entityId)
+        case .processProfile:    try await processProfileRepo.delete(id: entityId)
+        case .codebase:          try await codebaseRepo.delete(id: entityId)
+        case .documentVersion:   try await documentVersionRepo.delete(id: entityId)
         }
         Log.data.info("Deleted remote \(entityType.rawValue) \(entityId)")
     }
@@ -176,8 +233,13 @@ public final class RepositorySyncDataProvider: SyncDataProviderProtocol, @unchec
         case .checkIn:      tableName = "checkInRecord"
         case .document:     tableName = "document"
         case .category:     tableName = "category"
-        case .conversation: tableName = "conversation"
-        case .dependency:   tableName = "dependency"
+        case .conversation:     tableName = "conversation"
+        case .dependency:       tableName = "dependency"
+        case .session:          tableName = "session"
+        case .deliverable:      tableName = "deliverable"
+        case .processProfile:   tableName = "processProfile"
+        case .codebase:         tableName = "codebase"
+        case .documentVersion:  tableName = "documentVersion"
         }
         return try await dbQueue.read { db in
             try UUID.fetchAll(db, sql: "SELECT id FROM \(tableName)")

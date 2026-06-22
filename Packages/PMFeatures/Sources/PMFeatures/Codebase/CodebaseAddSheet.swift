@@ -2,11 +2,15 @@ import SwiftUI
 import PMDomain
 import PMUtilities
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 /// Sheet for adding a codebase to a project — local directory or GitHub URL.
 public struct CodebaseAddSheet: View {
     let projectId: UUID
     let codebaseRepo: CodebaseRepositoryProtocol
+    var syncManager: SyncManager?
     @Environment(\.dismiss) var dismiss
 
     @State private var sourceType: Codebase.SourceType = .local
@@ -19,9 +23,10 @@ public struct CodebaseAddSheet: View {
     @State private var errorMessage: String?
     @State private var isSaving = false
 
-    public init(projectId: UUID, codebaseRepo: CodebaseRepositoryProtocol) {
+    public init(projectId: UUID, codebaseRepo: CodebaseRepositoryProtocol, syncManager: SyncManager? = nil) {
         self.projectId = projectId
         self.codebaseRepo = codebaseRepo
+        self.syncManager = syncManager
     }
 
     public var body: some View {
@@ -69,6 +74,7 @@ public struct CodebaseAddSheet: View {
                     .disabled(!canSave || isSaving)
                 }
             }
+            #if os(iOS)
             .fileImporter(
                 isPresented: $showFolderPicker,
                 allowedContentTypes: [.folder],
@@ -76,6 +82,7 @@ public struct CodebaseAddSheet: View {
             ) { result in
                 handleFolderSelection(result)
             }
+            #endif
         }
     }
 
@@ -90,12 +97,12 @@ public struct CodebaseAddSheet: View {
                     Text(url.lastPathComponent)
                         .lineLimit(1)
                     Spacer()
-                    Button("Change") { showFolderPicker = true }
+                    Button("Change") { pickFolder() }
                         .buttonStyle(.borderless)
                 }
             } else {
                 Button("Select Folder...") {
-                    showFolderPicker = true
+                    pickFolder()
                 }
             }
         }
@@ -122,11 +129,41 @@ public struct CodebaseAddSheet: View {
         }
     }
 
+    private func pickFolder() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a codebase directory"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        selectedURL = url
+        if name.isEmpty {
+            name = url.lastPathComponent
+        }
+
+        do {
+            bookmarkData = try url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } catch {
+            Log.ai.error("Failed to create bookmark: \(error)")
+            errorMessage = "Could not create folder bookmark: \(error.localizedDescription)"
+        }
+        #else
+        showFolderPicker = true
+        #endif
+    }
+
+    /// Handles folder selection from fileImporter (iOS only)
     private func handleFolderSelection(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            // Must access the security-scoped resource before creating a bookmark
             guard url.startAccessingSecurityScopedResource() else {
                 errorMessage = "Could not access the selected folder."
                 return
@@ -136,19 +173,6 @@ public struct CodebaseAddSheet: View {
             if name.isEmpty {
                 name = url.lastPathComponent
             }
-            // Create security-scoped bookmark (macOS only)
-            #if os(macOS)
-            do {
-                bookmarkData = try url.bookmarkData(
-                    options: .withSecurityScope,
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
-            } catch {
-                Log.ai.error("Failed to create bookmark: \(error)")
-                errorMessage = "Could not create folder bookmark: \(error.localizedDescription)"
-            }
-            #endif
         case .failure(let error):
             errorMessage = error.localizedDescription
         }
@@ -182,6 +206,7 @@ public struct CodebaseAddSheet: View {
 
         do {
             try await codebaseRepo.save(codebase)
+            syncManager?.trackChange(entityType: .codebase, entityId: codebase.id, changeType: .create)
             Log.ai.info("Added codebase '\(effectiveName)' to project \(self.projectId)")
             dismiss()
         } catch {

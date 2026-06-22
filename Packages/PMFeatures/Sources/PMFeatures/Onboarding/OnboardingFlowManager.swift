@@ -445,11 +445,11 @@ public final class OnboardingFlowManager {
                 lastMilestoneName = nil
                 items.append(ProposedStructureItem(kind: .phase, name: name))
                 Log.ai.debug("extractStructure[\(index)]: phase '\(name)'")
-            case .createMilestone(_, let name):
+            case .createMilestone(_, let name, _):
                 lastMilestoneName = name
                 items.append(ProposedStructureItem(kind: .milestone, name: name, parentName: lastPhaseName))
                 Log.ai.debug("extractStructure[\(index)]: milestone '\(name)' under phase '\(lastPhaseName ?? "none")'")
-            case .createTask(_, let name, let priority, let effortType):
+            case .createTask(_, let name, let priority, let effortType, _):
                 items.append(ProposedStructureItem(
                     kind: .task,
                     name: name,

@@ -7,9 +7,11 @@ public enum SessionStateMachine {
     public static func validTransitions(from status: SessionStatus) -> [SessionStatus] {
         switch status {
         case .active:
-            return [.paused, .completed]
+            return [.paused, .completedPendingSummary]
         case .paused:
-            return [.active, .completed, .autoSummarised, .pendingAutoSummary]
+            return [.active, .completedPendingSummary, .autoSummarised, .pendingAutoSummary]
+        case .completedPendingSummary:
+            return [.completed]
         case .pendingAutoSummary:
             return [.autoSummarised]
         case .completed, .autoSummarised:
@@ -28,7 +30,7 @@ public enum SessionStateMachine {
         switch status {
         case .active, .paused:
             return true
-        case .completed, .autoSummarised, .pendingAutoSummary:
+        case .completed, .completedPendingSummary, .autoSummarised, .pendingAutoSummary:
             return false
         }
     }

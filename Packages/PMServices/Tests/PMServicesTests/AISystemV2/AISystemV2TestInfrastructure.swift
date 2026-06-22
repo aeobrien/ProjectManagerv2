@@ -157,6 +157,10 @@ final class MockSessionRepository: SessionRepositoryProtocol, @unchecked Sendabl
         }
     }
 
+    func replaceMessages(forSession sessionId: UUID, with newMessages: [SessionMessage]) async throws {
+        messages[sessionId] = newMessages
+    }
+
     func fetchSummary(forSession sessionId: UUID) async throws -> SessionSummary? {
         summaries[sessionId]
     }

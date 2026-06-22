@@ -7,22 +7,34 @@ struct SessionStateMachineTests {
 
     // MARK: - Valid Transitions
 
-    @Test("Active can transition to paused or completed")
+    @Test("Active can transition to paused or completedPendingSummary")
     func activeTransitions() {
         let valid = SessionStateMachine.validTransitions(from: .active)
         #expect(valid.contains(.paused))
-        #expect(valid.contains(.completed))
+        #expect(valid.contains(.completedPendingSummary))
+        #expect(!valid.contains(.completed)) // no longer direct
         #expect(valid.count == 2)
     }
 
-    @Test("Paused can transition to active, completed, autoSummarised, or pendingAutoSummary")
+    @Test("Paused can transition to active, completedPendingSummary, autoSummarised, or pendingAutoSummary")
     func pausedTransitions() {
         let valid = SessionStateMachine.validTransitions(from: .paused)
         #expect(valid.contains(.active))
-        #expect(valid.contains(.completed))
+        #expect(valid.contains(.completedPendingSummary))
         #expect(valid.contains(.autoSummarised))
         #expect(valid.contains(.pendingAutoSummary))
         #expect(valid.count == 4)
+    }
+
+    @Test("CompletedPendingSummary can only transition to completed")
+    func completedPendingSummaryTransitions() {
+        let valid = SessionStateMachine.validTransitions(from: .completedPendingSummary)
+        #expect(valid == [.completed])
+    }
+
+    @Test("CompletedPendingSummary does not occupy an active slot")
+    func completedPendingSummaryDoesNotOccupySlot() {
+        #expect(SessionStateMachine.occupiesActiveSlot(.completedPendingSummary) == false)
     }
 
     @Test("PendingAutoSummary can only transition to autoSummarised")
@@ -61,6 +73,31 @@ struct SessionStateMachineTests {
     func cannotSkipToAutoSummarised() {
         let result = SessionStateMachine.transition(from: .active, to: .autoSummarised)
         #expect(result == nil)
+    }
+
+    @Test("Cannot transition active directly to completed (must go via completedPendingSummary)")
+    func cannotSkipToCompleted() {
+        let result = SessionStateMachine.transition(from: .active, to: .completed)
+        #expect(result == nil)
+    }
+
+    @Test("Two-phase completion: active → completedPendingSummary → completed")
+    func twoPhaseCompletion() {
+        let step1 = SessionStateMachine.transition(from: .active, to: .completedPendingSummary)
+        #expect(step1 == .completedPendingSummary)
+        let step2 = SessionStateMachine.transition(from: .completedPendingSummary, to: .completed)
+        #expect(step2 == .completed)
+    }
+
+    @Test("CompletedPendingSummary session is not eligible for auto-summarisation")
+    func completedPendingSummaryNotEligible() {
+        let session = Session(
+            projectId: UUID(),
+            mode: .exploration,
+            status: .completedPendingSummary,
+            lastActiveAt: Date().addingTimeInterval(-48 * 60 * 60)
+        )
+        #expect(!SessionStateMachine.isEligibleForAutoSummarisation(session))
     }
 
     // MARK: - Active Slot

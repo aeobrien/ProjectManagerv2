@@ -54,6 +54,12 @@ public struct AIDevScreenView: View {
         .sheet(isPresented: $viewModel.showArtifactOverlay) {
             artifactOverlay
         }
+        .sheet(isPresented: $viewModel.showStructureProposalOverlay) {
+            structureProposalOverlay
+        }
+        .sheet(isPresented: $viewModel.showActionConfirmation) {
+            actionConfirmationOverlay
+        }
         .task {
             await viewModel.loadProjects()
         }
@@ -77,7 +83,13 @@ public struct AIDevScreenView: View {
             Picker("Project", selection: $viewModel.selectedProject) {
                 Text("No Project").tag(nil as Project?)
                 ForEach(viewModel.projects) { project in
-                    Text(project.name).tag(project as Project?)
+                    HStack(spacing: 6) {
+                        Text(project.name)
+                        if let modes = viewModel.projectCompletedModes[project.id], !modes.isEmpty {
+                            AIProgressIndicator(completedModes: modes)
+                        }
+                    }
+                    .tag(project as Project?)
                 }
             }
             .pickerStyle(.menu)
@@ -293,6 +305,12 @@ public struct AIDevScreenView: View {
                 artifactCard(type: draft.type, content: draft.content)
             }
 
+            // Show inline structure proposal cards
+            ForEach(Array(proposalIndicesForMessage(message).enumerated()), id: \.offset) { _, proposalIndex in
+                let proposal = viewModel.structureProposalHistory[proposalIndex]
+                structureProposalCard(content: proposal.content, version: proposal.version)
+            }
+
             // Show signals if present
             if !message.signals.isEmpty {
                 HStack(spacing: 4) {
@@ -314,15 +332,44 @@ public struct AIDevScreenView: View {
 
             // Show actions if present
             if !message.actions.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.purple)
-                    Text("\(message.actions.count) action(s)")
-                        .font(.caption2)
-                        .foregroundStyle(.purple)
+                if message.actionsApplied {
+                    // Historical actions from a resumed session — display only, not re-applicable
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                        Text("\(message.actions.count) action(s) applied")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.green.opacity(0.06))
+                    .clipShape(Capsule())
+                    .padding(.leading, 48)
+                } else {
+                    Button {
+                        Task { await viewModel.reviewActions(message.actions) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.purple)
+                            Text("\(message.actions.count) action(s)")
+                                .font(.caption2)
+                                .foregroundStyle(.purple)
+                            Text("Tap to review")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.purple.opacity(0.06))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 48)
                 }
-                .padding(.leading, 48)
             }
         }
     }
@@ -337,6 +384,19 @@ public struct AIDevScreenView: View {
         }
         let draftCount = message.signals.filter { if case .documentDraft = $0 { return true }; return false }.count
         let end = min(offset + draftCount, viewModel.draftHistory.count)
+        guard offset < end else { return [] }
+        return Array(offset..<end)
+    }
+
+    /// Map a message to the indices in structureProposalHistory that correspond to its structureProposal signals.
+    private func proposalIndicesForMessage(_ message: DevScreenMessage) -> [Int] {
+        var offset = 0
+        for msg in viewModel.messages {
+            if msg.id == message.id { break }
+            offset += msg.signals.filter { if case .structureProposal = $0 { return true }; return false }.count
+        }
+        let proposalCount = message.signals.filter { if case .structureProposal = $0 { return true }; return false }.count
+        let end = min(offset + proposalCount, viewModel.structureProposalHistory.count)
         guard offset < end else { return [] }
         return Array(offset..<end)
     }
@@ -379,6 +439,48 @@ public struct AIDevScreenView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 48)
+    }
+
+    // MARK: - Structure Proposal Card
+
+    private func structureProposalCard(content: String, version: Int) -> some View {
+        let previewLines = content.components(separatedBy: .newlines).prefix(4).joined(separator: "\n")
+
+        return Button {
+            viewModel.currentStructureProposal = content
+            viewModel.showStructureProposalOverlay = true
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: "list.bullet.indent")
+                        .foregroundStyle(.indigo)
+                    Text("Structure Proposal v\(version)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.indigo)
+                    Spacer()
+                    Text("Tap to review")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(previewLines)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.indigo.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.indigo.opacity(0.2), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -488,7 +590,7 @@ public struct AIDevScreenView: View {
         case .documentDraft(let type, _):
             signalChip("DRAFT: \(type)", color: .purple)
         case .structureProposal:
-            signalChip("PROPOSAL", color: .purple)
+            signalChip("PROPOSAL", color: .indigo)
         default:
             signalChip(signalLabel(signal), color: .gray)
         }
@@ -660,6 +762,142 @@ public struct AIDevScreenView: View {
         #endif
     }
 
+    // MARK: - Structure Proposal Overlay
+
+    private var structureProposalOverlay: some View {
+        VStack(spacing: 0) {
+            if let proposal = viewModel.currentStructureProposal {
+                let version = viewModel.structureProposalHistory.count
+
+                HStack {
+                    Image(systemName: "list.bullet.indent")
+                        .foregroundStyle(.indigo)
+                    Text("Structure Proposal v\(version)")
+                        .font(.headline)
+                    Spacer()
+                    Button("Dismiss") {
+                        viewModel.showStructureProposalOverlay = false
+                    }
+                }
+                .padding()
+
+                Divider()
+
+                ScrollView {
+                    markdownDocumentView(proposal)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Divider()
+
+                HStack(spacing: 12) {
+                    Button("Request Revision") {
+                        viewModel.showStructureProposalOverlay = false
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button("Approve & Apply") {
+                        Task { await viewModel.approveStructureProposal() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.indigo)
+                }
+                .padding()
+            } else {
+                Text("No structure proposal available")
+                    .foregroundStyle(.secondary)
+                    .padding()
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 500, minHeight: 400)
+        #endif
+    }
+
+    // MARK: - Action Confirmation Overlay
+
+    private var actionConfirmationOverlay: some View {
+        VStack(spacing: 0) {
+            if let confirmation = viewModel.currentActionConfirmation {
+                HStack {
+                    Image(systemName: "gearshape.fill")
+                        .foregroundStyle(.purple)
+                    Text("\(confirmation.changes.count) Proposed Actions")
+                        .font(.headline)
+                    Spacer()
+                    Button("Dismiss") {
+                        viewModel.showActionConfirmation = false
+                    }
+                }
+                .padding()
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(confirmation.changes.indices), id: \.self) { index in
+                            HStack(alignment: .top, spacing: 10) {
+                                Toggle("", isOn: Binding(
+                                    get: { viewModel.currentActionConfirmation?.changes[index].accepted ?? false },
+                                    set: { viewModel.currentActionConfirmation?.changes[index].accepted = $0 }
+                                ))
+                                .labelsHidden()
+                                #if os(macOS)
+                                .toggleStyle(.checkbox)
+                                #endif
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(confirmation.changes[index].description)
+                                        .font(.body)
+
+                                    if let diff = confirmation.changes[index].diff {
+                                        SectionDiffView(diff: diff)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+
+                            if index < confirmation.changes.count - 1 {
+                                Divider().padding(.leading, 44)
+                            }
+                        }
+                    }
+                    .padding(.vertical)
+                }
+
+                Divider()
+
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        viewModel.showActionConfirmation = false
+                        viewModel.currentActionConfirmation = nil
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button("Apply \(confirmation.acceptedCount) Action(s)") {
+                        Task { await viewModel.approveActions() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .disabled(confirmation.acceptedCount == 0)
+                }
+                .padding()
+            } else {
+                Text("No actions to review")
+                    .foregroundStyle(.secondary)
+                    .padding()
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 450, minHeight: 300)
+        #endif
+    }
+
     // MARK: - Helpers
 
     private func roleLabel(_ role: String) -> String {
@@ -700,7 +938,8 @@ public struct AIDevScreenView: View {
         switch signal {
         case .modeComplete: .green
         case .sessionEnd: .orange
-        case .documentDraft, .structureProposal: .purple
+        case .documentDraft: .purple
+        case .structureProposal: .indigo
         default: .blue
         }
     }
@@ -759,5 +998,88 @@ public struct AIDevScreenView: View {
     /// Inline markdown rendering (bold, italic, code, links) that preserves whitespace.
     private func markdownInline(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
+}
+
+// MARK: - Section Diff View
+
+private struct SectionDiffView: View {
+    let diff: SectionDiff
+    @State private var isExpanded = true
+
+    private var removedCount: Int { diff.lines.filter { $0.kind == .removed }.count }
+    private var addedCount: Int { diff.lines.filter { $0.kind == .added }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("\(removedCount) removed, \(addedCount) added")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(diff.lines) { line in
+                        HStack(spacing: 0) {
+                            Text(gutterSymbol(line.kind))
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(width: 16, alignment: .center)
+                                .foregroundStyle(lineColor(line.kind))
+
+                            Text(line.text)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(lineColor(line.kind))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(lineBackground(line.kind))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+            }
+        }
+    }
+
+    private func gutterSymbol(_ kind: SectionDiff.Line.Kind) -> String {
+        switch kind {
+        case .context: " "
+        case .removed: "-"
+        case .added: "+"
+        }
+    }
+
+    private func lineColor(_ kind: SectionDiff.Line.Kind) -> Color {
+        switch kind {
+        case .context: .secondary
+        case .removed: .red
+        case .added: .green
+        }
+    }
+
+    private func lineBackground(_ kind: SectionDiff.Line.Kind) -> Color {
+        switch kind {
+        case .context: .clear
+        case .removed: Color.red.opacity(0.08)
+        case .added: Color.green.opacity(0.08)
+        }
     }
 }

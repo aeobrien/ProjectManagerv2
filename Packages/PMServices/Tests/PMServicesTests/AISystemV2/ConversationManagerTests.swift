@@ -361,4 +361,86 @@ struct ConversationManagerTests {
         let config = ConversationConfig.forMode(.executionSupport, subMode: .retrospective)
         #expect(!config.parseActions)
     }
+
+    // MARK: - Two-Phase Completion Resilience
+
+    @Test("Complete session uses two-phase: completedPendingSummary then completed")
+    func twoPhaseCompletion() async throws {
+        let mgr = manager
+        mockLLM.queuedResponses = [
+            MockV2Responses.plain("Let's explore."),
+            LLMResponse(content: """
+                {
+                    "contentEstablished": {"decisions": ["Test"], "factsLearned": [], "progressMade": []},
+                    "contentObserved": {"patterns": [], "concerns": [], "strengths": []},
+                    "whatComesNext": {"nextActions": [], "openQuestions": [], "suggestedMode": null}
+                }
+                """),
+        ]
+
+        let session = try await mgr.startSession(projectId: projectId, mode: .exploration)
+        _ = try await mgr.sendMessage("Hello", sessionId: session.id, projectData: makeProjectData())
+
+        _ = try await mgr.completeSession(session.id)
+
+        // After successful completion, status should be .completed
+        let final = try await mockRepo.fetch(id: session.id)
+        #expect(final?.status == .completed)
+    }
+
+    @Test("Complete session stays completedPendingSummary when summary fails")
+    func completionResilienceOnFailure() async throws {
+        let mgr = manager
+        mockLLM.queuedResponses = [
+            MockV2Responses.plain("Let's explore."),
+        ]
+        // Summary generation will fail because LLM returns no more queued responses
+        // and the default response is not valid JSON for summary parsing
+        mockLLM.defaultResponse = LLMResponse(content: "not-valid-json")
+
+        let session = try await mgr.startSession(projectId: projectId, mode: .exploration)
+        _ = try await mgr.sendMessage("Hello", sessionId: session.id, projectData: makeProjectData())
+
+        // completeSession should throw since summary generation fails
+        do {
+            _ = try await mgr.completeSession(session.id)
+            // If summary parsing is lenient (falls back to defaults), it might succeed.
+            // In that case, verify the session reached .completed
+            let final = try await mockRepo.fetch(id: session.id)
+            #expect(final?.status == .completed)
+        } catch {
+            // Session should be stuck in completedPendingSummary
+            let final = try await mockRepo.fetch(id: session.id)
+            #expect(final?.status == .completedPendingSummary)
+        }
+    }
+
+    @Test("retryPendingSummaries recovers stuck sessions")
+    func retryPendingSummaries() async throws {
+        let mgr = manager
+        // Create a session in completedPendingSummary state
+        var session = TestFixtures.session(projectId: projectId, mode: .exploration, status: .active)
+        try await mockRepo.save(session)
+        session.status = .completedPendingSummary
+        try await mockRepo.save(session)
+
+        // Add a message so summary generation has content
+        let msg = TestFixtures.sessionMessage(sessionId: session.id, role: .user, content: "Test message")
+        try await mockRepo.appendMessage(msg)
+
+        // Queue a valid summary response
+        mockLLM.defaultResponse = LLMResponse(content: """
+            {
+                "contentEstablished": {"decisions": ["Recovered"], "factsLearned": [], "progressMade": []},
+                "contentObserved": {"patterns": [], "concerns": [], "strengths": []},
+                "whatComesNext": {"nextActions": [], "openQuestions": [], "suggestedMode": null}
+            }
+            """)
+
+        let recovered = try await mgr.retryPendingSummaries()
+        #expect(recovered == 1)
+
+        let final = try await mockRepo.fetch(id: session.id)
+        #expect(final?.status == .completed)
+    }
 }

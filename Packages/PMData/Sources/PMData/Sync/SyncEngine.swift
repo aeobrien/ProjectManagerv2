@@ -46,12 +46,17 @@ public actor SyncEngine {
     private var syncState: SyncState
     private var isSyncing = false
     private var zoneReady = false
+    private var hasEnqueuedThisSession = false
 
     /// Minimum interval between syncs (seconds).
     public let minSyncInterval: TimeInterval
 
     /// Conflict resolution threshold — if timestamps are within this many seconds, flag for manual merge.
     public let conflictThresholdSeconds: TimeInterval
+
+    /// UserDefaults key for persisting the server change token.
+    private static let serverChangeTokenKey = "syncEngine.serverChangeToken"
+    private static let lastSyncDateKey = "syncEngine.lastSyncDate"
 
     public init(
         backend: SyncBackendProtocol,
@@ -66,9 +71,31 @@ public actor SyncEngine {
         self.queue = queue
         self.dataProvider = dataProvider
         self.conflictResolver = conflictResolver
-        self.syncState = syncState
         self.minSyncInterval = minSyncInterval
         self.conflictThresholdSeconds = conflictThresholdSeconds
+
+        // Restore persisted sync state
+        var restored = syncState
+        let defaults = UserDefaults.standard
+        if let tokenData = defaults.data(forKey: Self.serverChangeTokenKey) {
+            restored.serverChangeToken = tokenData
+            Log.data.info("Restored server change token from previous session")
+        }
+        if let lastSync = defaults.object(forKey: Self.lastSyncDateKey) as? Date {
+            restored.lastSyncDate = lastSync
+        }
+        self.syncState = restored
+    }
+
+    /// Persist sync state to UserDefaults so it survives app restarts.
+    private func persistSyncState() {
+        let defaults = UserDefaults.standard
+        if let token = syncState.serverChangeToken {
+            defaults.set(token, forKey: Self.serverChangeTokenKey)
+        }
+        if let lastSync = syncState.lastSyncDate {
+            defaults.set(lastSync, forKey: Self.lastSyncDateKey)
+        }
     }
 
     // MARK: - Change Tracking
@@ -118,6 +145,9 @@ public actor SyncEngine {
 
         syncState.lastSyncDate = Date()
         syncState.pendingChangeCount = try await queue.pendingCount()
+
+        // Persist sync state (server change token) so incremental sync works across launches
+        persistSyncState()
 
         // Purge old synced changes (older than 7 days)
         let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
@@ -210,11 +240,21 @@ public actor SyncEngine {
 
     // MARK: - Initial Full Push
 
-    /// Enqueue all existing entities for sync. Call once when sync is first enabled
-    /// or when the queue has no history (e.g. after migrating from InMemorySyncQueue).
+    /// Enqueue all existing entities for sync. Only runs once — on the very first sync
+    /// when no server change token exists and the queue is empty.
     public func enqueueAllExistingEntities() async throws {
+        // Only enqueue once per session
+        guard !hasEnqueuedThisSession else { return }
+        hasEnqueuedThisSession = true
+
         guard let provider = dataProvider else {
             Log.data.error("Cannot enqueue all entities: no data provider")
+            return
+        }
+
+        // Skip if we already have a server change token (we've synced before)
+        if syncState.serverChangeToken != nil {
+            Log.data.info("Skipping initial enqueue: server change token exists (already synced)")
             return
         }
 
@@ -240,6 +280,30 @@ public actor SyncEngine {
         Log.data.info("Enqueued \(total) existing entities for initial sync")
     }
 
+    /// Force re-enqueue all entities regardless of prior sync state.
+    /// Use when entities were created before sync tracking was in place.
+    public func forceReenqueueAll() async throws {
+        guard let provider = dataProvider else {
+            Log.data.error("Cannot force re-enqueue: no data provider")
+            return
+        }
+
+        var total = 0
+        for entityType in SyncEntityType.allCases {
+            let ids = try await provider.allEntityIds(for: entityType)
+            for id in ids {
+                let change = SyncChange(
+                    entityType: entityType,
+                    entityId: id,
+                    changeType: .create
+                )
+                try await queue.enqueue(change)
+                total += 1
+            }
+        }
+        Log.data.info("Force re-enqueued \(total) entities for full sync")
+    }
+
     // MARK: - State
 
     /// Get the current sync state.
@@ -255,6 +319,10 @@ public actor SyncEngine {
     /// Reset sync state (forces full re-sync).
     public func resetState() {
         syncState = SyncState()
+        hasEnqueuedThisSession = false
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.serverChangeTokenKey)
+        defaults.removeObject(forKey: Self.lastSyncDateKey)
     }
 }
 

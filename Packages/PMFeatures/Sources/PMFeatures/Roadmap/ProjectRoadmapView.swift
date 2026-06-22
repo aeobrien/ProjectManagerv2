@@ -36,10 +36,6 @@ public struct ProjectRoadmapView: View {
     private var roadmapHeader: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(viewModel.project.name)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-
                 HStack(spacing: 12) {
                     Text("\(viewModel.phaseCount) phases")
                     Text("\(viewModel.milestoneCount) milestones")

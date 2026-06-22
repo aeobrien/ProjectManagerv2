@@ -3,8 +3,11 @@ import PMDomain
 import PMUtilities
 
 /// Manages session lifecycle: creation, resumption, transitions, and message appending.
-public final class SessionLifecycleManager: Sendable {
+public final class SessionLifecycleManager: @unchecked Sendable {
     private let repo: SessionRepositoryProtocol
+
+    /// Called after every session save, allowing sync tracking.
+    public var onSessionChanged: (@Sendable (UUID, String) -> Void)?
 
     public init(repo: SessionRepositoryProtocol) {
         self.repo = repo
@@ -23,6 +26,7 @@ public final class SessionLifecycleManager: Sendable {
             session.status = .paused
             session.lastActiveAt = Date()
             try await repo.save(session)
+            onSessionChanged?(session.id, "update")
             Log.ai.info("Paused existing active session \(session.id) for project \(projectId)")
         }
 
@@ -33,6 +37,7 @@ public final class SessionLifecycleManager: Sendable {
             status: .active
         )
         try await repo.save(session)
+        onSessionChanged?(session.id, "create")
         Log.ai.info("Started new session \(session.id) in mode \(mode.rawValue) for project \(projectId)")
         return session
     }
@@ -48,6 +53,7 @@ public final class SessionLifecycleManager: Sendable {
         if session.status == .active {
             session.lastActiveAt = Date()
             try await repo.save(session)
+            onSessionChanged?(sessionId, "update")
             Log.ai.info("Session \(sessionId) already active, refreshed lastActiveAt")
             return session
         }
@@ -60,6 +66,7 @@ public final class SessionLifecycleManager: Sendable {
         session.status = newStatus
         session.lastActiveAt = Date()
         try await repo.save(session)
+        onSessionChanged?(sessionId, "update")
         Log.ai.info("Resumed session \(sessionId)")
         return session
     }
@@ -84,6 +91,7 @@ public final class SessionLifecycleManager: Sendable {
         }
 
         try await repo.save(session)
+        onSessionChanged?(sessionId, "update")
         Log.ai.info("Transitioned session \(sessionId) to \(target.rawValue)")
         return session
     }
@@ -96,6 +104,7 @@ public final class SessionLifecycleManager: Sendable {
             session.status = .completed
             session.completedAt = Date()
             try await repo.save(session)
+            onSessionChanged?(session.id, "update")
             Log.ai.info("Completed stale session \(session.id) (was \(session.status.rawValue)) for project \(projectId)")
         }
     }
@@ -118,6 +127,7 @@ public final class SessionLifecycleManager: Sendable {
             rawVoiceTranscript: rawVoiceTranscript
         )
         try await repo.appendMessage(message)
+        onSessionChanged?(sessionId, "update")
         return message
     }
 }

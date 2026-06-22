@@ -14,6 +14,7 @@ public struct ProjectDetailView: View {
     var sessionRepo: SessionRepositoryProtocol?
     var codebaseRepo: CodebaseRepositoryProtocol?
     var codebaseIndexer: CodebaseIndexer?
+    var syncManager: SyncManager?
     @State private var selectedTab: DetailTab = .roadmap
     @State private var showRetrospective = false
     @State private var showCodebaseSheet = false
@@ -29,7 +30,8 @@ public struct ProjectDetailView: View {
         adversarialReviewManager: AdversarialReviewManager? = nil,
         sessionRepo: SessionRepositoryProtocol? = nil,
         codebaseRepo: CodebaseRepositoryProtocol? = nil,
-        codebaseIndexer: CodebaseIndexer? = nil
+        codebaseIndexer: CodebaseIndexer? = nil,
+        syncManager: SyncManager? = nil
     ) {
         self.viewModel = viewModel
         self.roadmapViewModel = roadmapViewModel
@@ -39,6 +41,7 @@ public struct ProjectDetailView: View {
         self.sessionRepo = sessionRepo
         self.codebaseRepo = codebaseRepo
         self.codebaseIndexer = codebaseIndexer
+        self.syncManager = syncManager
     }
 
     public var body: some View {
@@ -52,7 +55,12 @@ public struct ProjectDetailView: View {
             Divider()
             tabContent
         }
+        #if os(iOS)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        #else
         .navigationTitle(viewModel.project.name)
+        #endif
         .task { await viewModel.load(); await loadCodebases() }
         // Poll indexer state every 1s so the UI reflects ongoing indexing progress
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
@@ -182,18 +190,32 @@ public struct ProjectDetailView: View {
 
     private var tabContent: some View {
         VStack(spacing: 0) {
+            #if os(iOS)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(DetailTab.allCases, id: \.self) { tab in
+                        Button(tab.rawValue) { selectedTab = tab }
+                            .font(.subheadline)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(selectedTab == tab ? Color.accentColor : Color(.systemGray5))
+                            .foregroundStyle(selectedTab == tab ? .white : .primary)
+                            .clipShape(Capsule())
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .padding(.vertical, 8)
+            #else
             Picker("Tab", selection: $selectedTab) {
                 ForEach(DetailTab.allCases, id: \.self) { tab in
                     Text(tab.rawValue).tag(tab)
                 }
             }
-            #if os(iOS)
-            .pickerStyle(.menu)
-            #else
             .pickerStyle(.segmented)
-            #endif
             .padding(.horizontal)
             .padding(.vertical, 8)
+            #endif
 
             switch selectedTab {
             case .roadmap:
@@ -351,6 +373,7 @@ extension ProjectDetailView {
         guard let codebaseRepo else { return }
         await codebaseIndexer?.cleanupCodebase(codebase)
         try? await codebaseRepo.delete(id: codebase.id)
+        syncManager?.trackChange(entityType: .codebase, entityId: codebase.id, changeType: .delete)
         codebaseIndexer?.clearError(for: codebase.id)
         await loadCodebases()
     }
@@ -392,6 +415,7 @@ struct OverviewTabView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let repoURL = viewModel.project.repositoryURL, !repoURL.isEmpty {
                     PMSectionHeader("Repository")
+                        .padding(.horizontal)
                     if let url = URL(string: repoURL) {
                         Link(repoURL, destination: url)
                             .font(.body)
@@ -405,6 +429,7 @@ struct OverviewTabView: View {
 
                 if let dod = viewModel.project.definitionOfDone, !dod.isEmpty {
                     PMSectionHeader("Definition of Done")
+                        .padding(.horizontal)
                     Text(dod)
                         .font(.body)
                         .padding(.horizontal)
@@ -412,6 +437,7 @@ struct OverviewTabView: View {
 
                 if let transcript = viewModel.project.quickCaptureTranscript, !transcript.isEmpty {
                     PMSectionHeader("Original Capture")
+                        .padding(.horizontal)
                     markdownDocumentView(transcript)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal)
@@ -419,12 +445,14 @@ struct OverviewTabView: View {
 
                 if let notes = viewModel.project.notes, !notes.isEmpty {
                     PMSectionHeader("Notes")
+                        .padding(.horizontal)
                     Text(notes)
                         .font(.body)
                         .padding(.horizontal)
                 }
 
                 PMSectionHeader("Phases", subtitle: "\(viewModel.phases.count) phases")
+                    .padding(.horizontal)
                 ForEach(viewModel.phases) { phase in
                     HStack {
                         Text(phase.name)

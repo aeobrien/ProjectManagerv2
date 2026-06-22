@@ -70,7 +70,7 @@ public enum ModeConfigurationRegistry {
                 subMode: .checkIn,
                 parseActions: true,
                 expectedSignals: ["SESSION_END"],
-                supportsArtifacts: false
+                supportsArtifacts: true
             )
         case .returnBriefing:
             return ModeConfiguration(
@@ -78,7 +78,7 @@ public enum ModeConfigurationRegistry {
                 subMode: .returnBriefing,
                 parseActions: false,
                 expectedSignals: ["SESSION_END"],
-                supportsArtifacts: false
+                supportsArtifacts: true
             )
         case .projectReview:
             return ModeConfiguration(
@@ -86,7 +86,7 @@ public enum ModeConfigurationRegistry {
                 subMode: .projectReview,
                 parseActions: true,
                 expectedSignals: ["SESSION_END"],
-                supportsArtifacts: false
+                supportsArtifacts: true
             )
         case .retrospective:
             return ModeConfiguration(
@@ -94,14 +94,14 @@ public enum ModeConfigurationRegistry {
                 subMode: .retrospective,
                 parseActions: false,
                 expectedSignals: ["SESSION_END"],
-                supportsArtifacts: false
+                supportsArtifacts: true
             )
         case nil:
             return ModeConfiguration(
                 mode: .executionSupport,
                 parseActions: true,
                 expectedSignals: ["SESSION_END"],
-                supportsArtifacts: false
+                supportsArtifacts: true
             )
         }
     }

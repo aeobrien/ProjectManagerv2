@@ -70,6 +70,10 @@ struct PhaseRow: View {
                 }
                 .buttonStyle(.plain)
 
+                Image(systemName: phase.status.iconName)
+                    .font(.caption)
+                    .foregroundStyle(phase.status.color)
+
                 if isEditing {
                     TextField("Phase name", text: $editName, onCommit: {
                         var updated = phase
@@ -98,7 +102,7 @@ struct PhaseRow: View {
 
                 Text(phase.status.displayName)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(phase.status.color)
 
                 // Progress
                 let milestones = viewModel.milestonesByPhase[phase.id] ?? []
@@ -114,6 +118,18 @@ struct PhaseRow: View {
             .padding(.vertical, 8)
             .background(Color.primary.opacity(0.03))
             .contextMenu {
+                Menu("Status") {
+                    ForEach(PhaseStatus.allCases, id: \.self) { status in
+                        Button {
+                            var updated = phase
+                            updated.status = status
+                            Task { await viewModel.updatePhase(updated) }
+                        } label: {
+                            Label(status.displayName, systemImage: status.iconName)
+                        }
+                        .disabled(phase.status == status)
+                    }
+                }
                 if phase.retrospectiveCompletedAt == nil,
                    let manager = viewModel.retrospectiveManager {
                     let milestones = viewModel.milestonesByPhase[phase.id] ?? []
@@ -125,7 +141,6 @@ struct PhaseRow: View {
                         } label: {
                             Label("Start Retrospective", systemImage: "text.bubble")
                         }
-                        Divider()
                     }
                 }
                 if let notes = phase.retrospectiveNotes, !notes.isEmpty {
@@ -134,8 +149,8 @@ struct PhaseRow: View {
                     } label: {
                         Label("View Retrospective Notes", systemImage: "doc.text")
                     }
-                    Divider()
                 }
+                Divider()
                 Button("Delete Phase", role: .destructive) {
                     Task { await viewModel.deletePhase(phase) }
                 }
@@ -260,6 +275,16 @@ struct MilestoneRow: View {
             .contextMenu {
                 Button("Edit...") {
                     showEditSheet = true
+                }
+                Menu("Status") {
+                    ForEach(ItemStatus.allCases, id: \.self) { status in
+                        Button(status.displayName) {
+                            var updated = milestone
+                            updated.status = status
+                            Task { await viewModel.updateMilestone(updated) }
+                        }
+                        .disabled(milestone.status == status)
+                    }
                 }
                 Divider()
                 Button("Delete Milestone", role: .destructive) {

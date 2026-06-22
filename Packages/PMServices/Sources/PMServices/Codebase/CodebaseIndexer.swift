@@ -118,10 +118,11 @@ public final class CodebaseIndexer: Sendable {
         // Chunk all files
         let chunker = TextChunker(maxChunkSize: 500, overlap: 50)
         var allChunks: [String] = []
+        let rootPrefixLength = rootURL.path.count + 1
 
         for fileURL in files {
             guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
-            let relativePath = fileURL.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+            let relativePath = String(fileURL.path.dropFirst(rootPrefixLength))
             let headerComment = "// File: \(relativePath)\n"
             let rawChunks = chunker.chunk(content)
             let headeredChunks = rawChunks.map { headerComment + $0 }
@@ -241,8 +242,9 @@ public final class CodebaseIndexer: Sendable {
 
         guard let files = try? scanFiles(at: rootURL, sizeLimitMB: codebase.fileSizeLimitMB) else { return nil }
 
+        let rootPrefixLength = rootURL.path.count + 1
         let listing = files.map { url in
-            url.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+            String(url.path.dropFirst(rootPrefixLength))
         }
 
         return "CODEBASE FILE LISTING (\(codebase.name), \(listing.count) files):\n" + listing.joined(separator: "\n")
@@ -254,9 +256,10 @@ public final class CodebaseIndexer: Sendable {
     private func buildCodebaseSnapshot(files: [URL], rootURL: URL) -> String {
         let maxSnapshotChars = 30_000
         var snapshot = ""
+        let rootPrefixLength = rootURL.path.count + 1
 
         for fileURL in files {
-            let relativePath = fileURL.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+            let relativePath = String(fileURL.path.dropFirst(rootPrefixLength))
             guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
 
             let lines = content.components(separatedBy: .newlines)
@@ -468,10 +471,40 @@ public final class CodebaseIndexer: Sendable {
 
     // MARK: - File Scanning
 
-    /// Directories always skipped during scanning.
+    /// Directories always skipped during scanning (safety net for repos with missing/incomplete .gitignore).
     private static let skippedDirectories: Set<String> = [
-        ".git", "node_modules", "build", "DerivedData", ".build", "dist", "target",
-        "__pycache__", ".venv", "venv", "Pods", ".next"
+        // Version control
+        ".git", ".svn", ".hg",
+        // JavaScript / Node
+        "node_modules", "dist", ".next", ".nuxt", ".parcel-cache", ".turbo",
+        // Apple / Xcode
+        "DerivedData", "Pods", ".cocoapods",
+        // Swift / SPM
+        ".build",
+        // General build output
+        "build", "out", "bin", "obj", "target",
+        // Python
+        "__pycache__", ".venv", "venv", ".tox", ".pytest_cache",
+        // Java / Kotlin / Gradle
+        ".gradle",
+        // C/C++ / CMake
+        "cmake-build-debug", "cmake-build-release", "cmake-build-relwithdebinfo", "cmake-build-minsizerel",
+        // Dart / Flutter
+        ".dart_tool", ".pub-cache",
+        // .NET
+        // (bin/obj already covered above)
+        // Infrastructure / tooling
+        ".terraform",
+        // React Native / Expo
+        ".expo",
+        // Angular
+        ".angular",
+        // Vendored dependencies
+        "vendor",
+        // Coverage / test output
+        "coverage", ".nyc_output",
+        // Misc
+        "__MACOSX", ".cache", "tmp",
     ]
 
     /// Extensionless filenames to include.
@@ -489,12 +522,122 @@ public final class CodebaseIndexer: Sendable {
     ]
 
     private func scanFiles(at rootURL: URL, sizeLimitMB: Int) throws -> [URL] {
+        // For git repositories, prefer `git ls-files` — it automatically respects .gitignore,
+        // excludes submodule contents, and returns only relative paths.
+        let isGitRepo = FileManager.default.fileExists(atPath: rootURL.appendingPathComponent(".git").path)
+        if isGitRepo, let gitFiles = try? scanFilesUsingGit(at: rootURL, sizeLimitMB: sizeLimitMB) {
+            return gitFiles
+        }
+
+        // Fallback: FileManager enumeration (non-git directories, or if git ls-files fails)
+        return try scanFilesUsingFileManager(at: rootURL, sizeLimitMB: sizeLimitMB)
+    }
+
+    // MARK: - Git-based file scanning
+
+    /// Use `git ls-files` to get the list of tracked + untracked-but-not-ignored files.
+    /// This automatically respects .gitignore, .git/info/exclude, global gitignore,
+    /// and excludes submodule contents (they appear as a single entry, not expanded).
+    private func scanFilesUsingGit(at rootURL: URL, sizeLimitMB: Int) throws -> [URL]? {
+        #if os(macOS)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        // --cached: tracked files, --others: untracked files, --exclude-standard: respect .gitignore
+        process.arguments = ["ls-files", "--cached", "--others", "--exclude-standard"]
+        process.currentDirectoryURL = rootURL
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorMsg = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            Log.ai.error("git ls-files failed: \(errorMsg)")
+            return nil
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+
+        let relativePaths = output.components(separatedBy: .newlines).filter { !$0.isEmpty }
+
+        // Log submodule detection for visibility
+        let submodules = Self.submodulePaths(at: rootURL)
+        if !submodules.isEmpty {
+            Log.ai.info("Detected \(submodules.count) git submodule(s): \(submodules.joined(separator: ", ")) — excluded from scan")
+        }
+
         let sizeLimitBytes = Int64(sizeLimitMB) * 1_048_576
         var totalSize: Int64 = 0
         var files: [URL] = []
+        let fm = FileManager.default
+
+        for relativePath in relativePaths {
+            let fileURL = rootURL.appendingPathComponent(relativePath)
+
+            // Filter by allowed extensions/filenames
+            let ext = fileURL.pathExtension.lowercased()
+            let filename = fileURL.lastPathComponent.lowercased()
+            guard Self.allowedExtensions.contains(ext) || Self.allowedFilenames.contains(filename) else {
+                continue
+            }
+
+            // Check file exists and get size (git ls-files may list deleted files)
+            guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
+                  let fileSize = attrs[.size] as? Int64 else {
+                continue
+            }
+
+            if totalSize + fileSize > sizeLimitBytes { break }
+            totalSize += fileSize
+            files.append(fileURL)
+        }
+
+        Log.ai.info("git ls-files returned \(relativePaths.count) paths, \(files.count) matched allowed extensions")
+        return files
+        #else
+        // git ls-files not available on iOS
+        return nil
+        #endif
+    }
+
+    /// Returns the set of submodule paths relative to the repo root.
+    private static func submodulePaths(at rootURL: URL) -> Set<String> {
+        let gitmodulesURL = rootURL.appendingPathComponent(".gitmodules")
+        guard let content = try? String(contentsOf: gitmodulesURL, encoding: .utf8) else { return [] }
+
+        var paths = Set<String>()
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("path = ") {
+                let path = String(trimmed.dropFirst("path = ".count))
+                paths.insert(path)
+            }
+        }
+        return paths
+    }
+
+    // MARK: - FileManager-based file scanning (fallback for non-git directories)
+
+    private func scanFilesUsingFileManager(at rootURL: URL, sizeLimitMB: Int) throws -> [URL] {
+        let sizeLimitBytes = Int64(sizeLimitMB) * 1_048_576
+        var totalSize: Int64 = 0
+        var files: [URL] = []
+        let rootPrefixLength = rootURL.path.count + 1 // +1 for trailing "/"
 
         // Load .gitignore rules if present (mutable — nested .gitignore files are added during scan)
         var ignoreRules = GitignoreRules(rootURL: rootURL)
+
+        // Load submodule paths for skipping
+        let submodules = Self.submodulePaths(at: rootURL)
+        if !submodules.isEmpty {
+            Log.ai.info("Detected \(submodules.count) git submodule(s): \(submodules.joined(separator: ", ")) — will skip")
+        }
 
         let fm = FileManager.default
 
@@ -522,14 +665,25 @@ public final class CodebaseIndexer: Sendable {
                     enumerator.skipDescendants()
                     continue
                 }
-                let relativePath = fileURL.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+                let relativePath = String(fileURL.path.dropFirst(rootPrefixLength))
+                // Skip submodule directories
+                if submodules.contains(relativePath) {
+                    Log.ai.debug("Skipping submodule directory: \(relativePath)")
+                    enumerator.skipDescendants()
+                    continue
+                }
+                // Skip cmake-build-* variants via prefix matching
+                if dirName.hasPrefix("cmake-build-") {
+                    enumerator.skipDescendants()
+                    continue
+                }
                 if Self.skippedDirectories.contains(dirName) || ignoreRules.isIgnored(relativePath + "/", isDirectory: true) {
                     enumerator.skipDescendants()
                     continue
                 }
                 // Load nested .gitignore if present
                 let nestedGitignore = fileURL.appendingPathComponent(".gitignore")
-                if FileManager.default.fileExists(atPath: nestedGitignore.path) {
+                if fm.fileExists(atPath: nestedGitignore.path) {
                     ignoreRules.addRules(from: nestedGitignore, directoryRelativePath: relativePath)
                 }
                 continue
@@ -562,7 +716,7 @@ public final class CodebaseIndexer: Sendable {
             guard resourceValues.isRegularFile == true else { continue }
 
             // Compute path relative to root for gitignore matching
-            let relativePath = fileURL.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+            let relativePath = String(fileURL.path.dropFirst(rootPrefixLength))
 
             // Skip files matched by .gitignore
             if ignoreRules.isIgnored(relativePath, isDirectory: false) { continue }

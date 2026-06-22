@@ -576,7 +576,7 @@ struct FocusManagerTests {
         let mid = UUID()
         let tasks = (0..<20).map { PMTask(milestoneId: mid, name: "T\($0)", sortOrder: $0) }
         let visible = FocusManager.curateVisibleTasks(tasks: tasks, maxVisible: 50)
-        #expect(visible.count == 10) // clamped to max 10
+        #expect(visible.count == 20) // clamped to max 20
     }
 
     // MARK: Health Signals

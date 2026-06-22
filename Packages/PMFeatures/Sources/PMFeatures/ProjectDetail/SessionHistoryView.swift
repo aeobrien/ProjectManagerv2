@@ -262,6 +262,7 @@ struct SessionHistoryView: View {
         case .active: .blue
         case .paused: .orange
         case .completed: .green
+        case .completedPendingSummary: .mint
         case .autoSummarised: .purple
         case .pendingAutoSummary: .yellow
         }
@@ -333,6 +334,7 @@ extension SessionStatus {
         case .active: "Active"
         case .paused: "Paused"
         case .completed: "Completed"
+        case .completedPendingSummary: "Completing..."
         case .autoSummarised: "Auto-summarised"
         case .pendingAutoSummary: "Pending Summary"
         }

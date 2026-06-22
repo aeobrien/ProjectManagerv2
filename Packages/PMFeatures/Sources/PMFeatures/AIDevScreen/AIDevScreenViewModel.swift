@@ -1,4 +1,5 @@
 import Foundation
+import PMData
 import PMDomain
 import PMServices
 import PMUtilities
@@ -11,13 +12,16 @@ public struct DevScreenMessage: Identifiable, Sendable {
     public let signals: [ResponseSignal]
     public let actions: [AIAction]
     public let timestamp: Date
+    /// Whether the actions in this message have already been applied (e.g. from a previous session).
+    public let actionsApplied: Bool
 
-    public init(role: String, content: String, signals: [ResponseSignal] = [], actions: [AIAction] = [], timestamp: Date = Date()) {
+    public init(role: String, content: String, signals: [ResponseSignal] = [], actions: [AIAction] = [], timestamp: Date = Date(), actionsApplied: Bool = false) {
         self.role = role
         self.content = content
         self.signals = signals
         self.actions = actions
         self.timestamp = timestamp
+        self.actionsApplied = actionsApplied
     }
 }
 
@@ -39,6 +43,9 @@ public final class AIDevScreenViewModel {
     private let documentRepo: DocumentRepositoryProtocol?
     private let codebaseIndexer: CodebaseIndexer?
     private let codebaseRepo: CodebaseRepositoryProtocol?
+
+    /// Optional sync manager for tracking changes to CloudKit.
+    public var syncManager: SyncManager?
 
     // MARK: - State
 
@@ -73,6 +80,21 @@ public final class AIDevScreenViewModel {
 
     /// Controls the artifact overlay sheet.
     var showArtifactOverlay = false
+
+    /// The most recent structure proposal from signals.
+    var currentStructureProposal: String?
+
+    /// All structure proposals received in this session with version tracking.
+    var structureProposalHistory: [(content: String, version: Int)] = []
+
+    /// Controls the structure proposal overlay sheet.
+    var showStructureProposalOverlay = false
+
+    /// The current bundled action confirmation for review.
+    var currentActionConfirmation: BundledConfirmation?
+
+    /// Controls the action confirmation overlay sheet.
+    var showActionConfirmation = false
 
     /// Tracks deliverable statuses for the current project.
     var deliverableStatuses: [DeliverableType: DeliverableStatus] = [:]
@@ -125,6 +147,21 @@ public final class AIDevScreenViewModel {
         self.documentRepo = documentRepo
         self.codebaseIndexer = codebaseIndexer
         self.codebaseRepo = codebaseRepo
+
+        // Retry stuck pending summaries when network reconnects
+        NotificationCenter.default.addObserver(forName: .networkReconnected, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                do {
+                    let recovered = try await self.conversationManager.retryPendingSummaries()
+                    if recovered > 0 {
+                        Log.ai.info("Recovered \(recovered) pending session summaries on reconnect")
+                    }
+                } catch {
+                    Log.ai.error("Failed to retry pending summaries: \(error)")
+                }
+            }
+        }
     }
 
     // MARK: - Actions
@@ -139,7 +176,7 @@ public final class AIDevScreenViewModel {
             for project in projects {
                 let sessions = (try? await sessionRepo.fetchAll(forProject: project.id)) ?? []
                 let completed = Set(sessions
-                    .filter { $0.status == .completed || $0.status == .autoSummarised }
+                    .filter { $0.status == .completed || $0.status == .autoSummarised || $0.status == .completedPendingSummary }
                     .map(\.mode))
                 if !completed.isEmpty {
                     modes[project.id] = completed
@@ -148,10 +185,46 @@ public final class AIDevScreenViewModel {
             projectCompletedModes = modes
 
             Log.ai.debug("AIDevScreen loaded \(self.projects.count) projects")
+
+            // Restore last-used project/mode selection and auto-resume if possible
+            await restoreLastSession()
         } catch {
             errorMessage = error.localizedDescription
             Log.ai.error("AIDevScreen failed to load projects: \(error)")
         }
+    }
+
+    /// Restore the last-used project and mode from UserDefaults, then auto-start if a resumable session exists.
+    private func restoreLastSession() async {
+        guard activeSession == nil else { return }
+        let defaults = UserDefaults.standard
+        guard let projectIdString = defaults.string(forKey: "aiDevScreen.lastProjectId"),
+              let projectId = UUID(uuidString: projectIdString),
+              let project = projects.first(where: { $0.id == projectId }) else { return }
+
+        selectedProject = project
+
+        if let modeString = defaults.string(forKey: "aiDevScreen.lastMode"),
+           let mode = SessionMode(rawValue: modeString) {
+            selectedMode = mode
+        }
+        if let subModeString = defaults.string(forKey: "aiDevScreen.lastSubMode"),
+           let subMode = SessionSubMode(rawValue: subModeString) {
+            selectedSubMode = subMode
+        } else {
+            selectedSubMode = nil
+        }
+
+        // Auto-start session (will resume if a paused session matches)
+        await startSession()
+    }
+
+    /// Persist the current project/mode selection to UserDefaults.
+    private func saveLastSession() {
+        let defaults = UserDefaults.standard
+        defaults.set(selectedProject?.id.uuidString, forKey: "aiDevScreen.lastProjectId")
+        defaults.set(selectedMode.rawValue, forKey: "aiDevScreen.lastMode")
+        defaults.set(selectedSubMode?.rawValue, forKey: "aiDevScreen.lastSubMode")
     }
 
     /// Auto-pause the active session when the sheet is dismissed.
@@ -180,14 +253,17 @@ public final class AIDevScreenViewModel {
                 try await conversationManager.cleanupStaleSessions(forProject: project.id, excluding: resumable.id)
                 // Load existing messages, re-parsing signals from assistant messages
                 let sessionMessages = try await conversationManager.messages(forSession: resumable.id)
+                let resumeModeConfig = ModeConfigurationRegistry.configuration(for: resumable.mode, subMode: resumable.subMode)
                 messages = sessionMessages.map { msg in
                     if msg.role == .assistant {
-                        let parsed = signalParser.parse(msg.content, parseActions: false)
+                        let parsed = signalParser.parse(msg.content, parseActions: resumeModeConfig.parseActions)
                         return DevScreenMessage(
                             role: "assistant",
                             content: parsed.naturalLanguage,
                             signals: parsed.signals,
-                            timestamp: msg.timestamp
+                            actions: parsed.actions,
+                            timestamp: msg.timestamp,
+                            actionsApplied: !parsed.actions.isEmpty
                         )
                     } else {
                         return DevScreenMessage(
@@ -197,8 +273,9 @@ public final class AIDevScreenViewModel {
                         )
                     }
                 }
-                // Rebuild draft history from resumed messages
+                // Rebuild draft and proposal history from resumed messages
                 rebuildDraftHistory()
+                rebuildStructureProposalHistory()
                 Log.ai.info("AIDevScreen resumed session \(resumable.id) (was \(resumable.status.rawValue))")
                 await loadDeliverableStatuses()
             } else {
@@ -214,10 +291,15 @@ public final class AIDevScreenViewModel {
                 capturedRecommendation = nil
                 currentDraft = nil
                 draftHistory = []
+                currentStructureProposal = nil
+                structureProposalHistory = []
                 lastSignals = []
                 Log.ai.info("AIDevScreen started new \(self.selectedMode.rawValue) session")
                 await loadDeliverableStatuses()
             }
+
+            // Persist selection for auto-restore on next open
+            saveLastSession()
 
             // Ensure codebases are indexed (skips if already in memory)
             if let indexer = codebaseIndexer, let cbRepo = codebaseRepo {
@@ -294,6 +376,12 @@ public final class AIDevScreenViewModel {
                     }
                     Log.ai.info("AIDevScreen captured draft: \(typeKey) v\(version) (raw: \(rawType))")
                 }
+                if case .structureProposal(let content) = signal {
+                    let version = structureProposalHistory.count + 1
+                    currentStructureProposal = content
+                    structureProposalHistory.append((content: content, version: version))
+                    Log.ai.info("AIDevScreen captured structure proposal v\(version)")
+                }
             }
 
             messages.append(DevScreenMessage(
@@ -333,8 +421,20 @@ public final class AIDevScreenViewModel {
             activeSession = nil
             Log.ai.info("AIDevScreen session completed")
         } catch {
-            errorMessage = error.localizedDescription
-            Log.ai.error("AIDevScreen complete failed: \(error)")
+            // Session is now in .completedPendingSummary — user sees it as complete,
+            // summary will be retried on network reconnect.
+            messages.append(DevScreenMessage(
+                role: "system",
+                content: "Session marked complete. Summary generation failed (will retry automatically): \(error.localizedDescription)"
+            ))
+
+            // Still seed deliverables since the conversation content is available
+            if session.mode == .exploration, let recommendation = capturedRecommendation {
+                await seedDeliverablesFromRecommendation(recommendation, projectId: session.projectId)
+            }
+
+            activeSession = nil
+            Log.ai.error("AIDevScreen complete failed (session saved as pendingSummary): \(error)")
         }
 
         isCompleting = false
@@ -377,8 +477,79 @@ public final class AIDevScreenViewModel {
         capturedRecommendation = nil
         currentDraft = nil
         draftHistory = []
+        currentStructureProposal = nil
+        structureProposalHistory = []
+        currentActionConfirmation = nil
         deliverableStatuses = [:]
         lastSignals = []
+    }
+
+    // MARK: - Action Execution
+
+    private func makeActionExecutor() -> ActionExecutor {
+        var executor = ActionExecutor(
+            taskRepo: taskRepo,
+            milestoneRepo: milestoneRepo,
+            subtaskRepo: subtaskRepo,
+            projectRepo: projectRepo,
+            phaseRepo: phaseRepo,
+            documentRepo: documentRepo,
+            sessionProjectId: selectedProject?.id
+        )
+        if let syncManager {
+            executor.onChangeTracked = { entityType, entityId, changeType in
+                guard let syncType = SyncEntityType(rawValue: entityType),
+                      let syncChange = SyncChangeType(rawValue: changeType) else { return }
+                Task { @MainActor in
+                    syncManager.trackChange(entityType: syncType, entityId: entityId, changeType: syncChange)
+                }
+            }
+        }
+        return executor
+    }
+
+    /// Prepare actions for user review by generating confirmation descriptions.
+    func reviewActions(_ actions: [AIAction]) async {
+        let executor = makeActionExecutor()
+        currentActionConfirmation = await executor.generateConfirmation(from: actions)
+        showActionConfirmation = true
+    }
+
+    /// Execute the accepted actions from the current confirmation.
+    func approveActions() async {
+        guard let confirmation = currentActionConfirmation else { return }
+        let executor = makeActionExecutor()
+        let count = confirmation.acceptedCount
+        do {
+            let result = try await executor.execute(confirmation)
+            showActionConfirmation = false
+
+            // Record action feedback in conversation history so the AI knows
+            // the real IDs of created entities for subsequent turns.
+            if let feedback = result.feedbackMessage, let sessionId = activeSession?.id {
+                messages.append(DevScreenMessage(role: "system", content: feedback))
+                try? await conversationManager.recordActionFeedback(
+                    sessionId: sessionId,
+                    content: feedback
+                )
+            } else {
+                messages.append(DevScreenMessage(
+                    role: "system",
+                    content: "Executed \(count) action(s)."
+                ))
+            }
+            Log.ai.info("AIDevScreen executed \(count) action(s)")
+        } catch {
+            // Executor handles partial success internally — this only throws if ALL actions failed
+            showActionConfirmation = false
+            errorMessage = "Some actions failed: \(error.localizedDescription)"
+            messages.append(DevScreenMessage(
+                role: "system",
+                content: "Action execution had failures. Check logs for details."
+            ))
+            Log.ai.error("AIDevScreen action execution failed: \(error)")
+        }
+        currentActionConfirmation = nil
     }
 
     /// Approve the current draft and save it as a Deliverable entity.
@@ -414,6 +585,7 @@ public final class AIDevScreenViewModel {
                     savedAt: Date()
                 ))
                 try await deliverableRepo.save(deliverable)
+                syncManager?.trackChange(entityType: .deliverable, entityId: deliverable.id, changeType: .update)
                 Log.ai.info("AIDevScreen updated deliverable \(deliverable.id) to v\(version)")
             } else {
                 // Create new deliverable
@@ -433,6 +605,7 @@ public final class AIDevScreenViewModel {
                     ]
                 )
                 try await deliverableRepo.save(deliverable)
+                syncManager?.trackChange(entityType: .deliverable, entityId: deliverable.id, changeType: .create)
                 Log.ai.info("AIDevScreen created deliverable \(deliverable.id)")
             }
 
@@ -446,6 +619,7 @@ public final class AIDevScreenViewModel {
                     doc.version += 1
                     doc.updatedAt = Date()
                     try await documentRepo.save(doc)
+                    syncManager?.trackChange(entityType: .document, entityId: doc.id, changeType: .update)
                     Log.ai.info("AIDevScreen updated document '\(doc.title)' to v\(doc.version)")
                 } else {
                     let doc = Document(
@@ -455,6 +629,7 @@ public final class AIDevScreenViewModel {
                         content: draft.content
                     )
                     try await documentRepo.save(doc)
+                    syncManager?.trackChange(entityType: .document, entityId: doc.id, changeType: .create)
                     Log.ai.info("AIDevScreen created document '\(doc.title)'")
                 }
             }
@@ -515,6 +690,179 @@ public final class AIDevScreenViewModel {
         }
     }
 
+    /// Rebuild structure proposal history from loaded messages (used after resume).
+    private func rebuildStructureProposalHistory() {
+        structureProposalHistory = []
+        currentStructureProposal = nil
+        for message in messages {
+            for signal in message.signals {
+                if case .structureProposal(let content) = signal {
+                    let version = structureProposalHistory.count + 1
+                    structureProposalHistory.append((content: content, version: version))
+                    currentStructureProposal = content
+                }
+            }
+        }
+        if !structureProposalHistory.isEmpty {
+            Log.ai.info("AIDevScreen rebuilt \(self.structureProposalHistory.count) structure proposals from resumed session")
+        }
+    }
+
+    /// A parsed element from a structure proposal.
+    struct ParsedStructureElement {
+        enum Kind { case phase, milestone, task }
+        let kind: Kind
+        let name: String
+    }
+
+    /// Parse a structure proposal into phases, milestones, and tasks using lenient heuristics.
+    func parseStructureProposal(_ text: String) -> [ParsedStructureElement] {
+        var elements: [ParsedStructureElement] = []
+        let lines = text.components(separatedBy: .newlines)
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+
+            // Explicit markers: "Phase N:", "Milestone N.M:", "Task:"
+            if trimmed.range(of: #"^Phase\s+\d+"#, options: .regularExpression) != nil {
+                let name = trimmed.replacingOccurrences(of: #"^Phase\s+\d+\s*[:.\-–—]\s*"#, with: "", options: .regularExpression)
+                elements.append(ParsedStructureElement(kind: .phase, name: name.isEmpty ? trimmed : name))
+                continue
+            }
+            if trimmed.range(of: #"^Milestone\s+[\d.]+"#, options: .regularExpression) != nil {
+                let name = trimmed.replacingOccurrences(of: #"^Milestone\s+[\d.]+\s*[:.\-–—]\s*"#, with: "", options: .regularExpression)
+                elements.append(ParsedStructureElement(kind: .milestone, name: name.isEmpty ? trimmed : name))
+                continue
+            }
+            if trimmed.range(of: #"^Task\s*[:.\-–—]"#, options: .regularExpression) != nil {
+                let name = trimmed.replacingOccurrences(of: #"^Task\s*[:.\-–—]\s*"#, with: "", options: .regularExpression)
+                elements.append(ParsedStructureElement(kind: .task, name: name.isEmpty ? trimmed : name))
+                continue
+            }
+
+            // Markdown headers: # = phase, ## = milestone, ### = task
+            if trimmed.hasPrefix("### ") {
+                elements.append(ParsedStructureElement(kind: .task, name: String(trimmed.dropFirst(4))))
+                continue
+            }
+            if trimmed.hasPrefix("## ") {
+                elements.append(ParsedStructureElement(kind: .milestone, name: String(trimmed.dropFirst(3))))
+                continue
+            }
+            if trimmed.hasPrefix("# ") {
+                elements.append(ParsedStructureElement(kind: .phase, name: String(trimmed.dropFirst(2))))
+                continue
+            }
+
+            // Indentation-based: count leading spaces
+            let leadingSpaces = line.prefix(while: { $0 == " " }).count
+            let isBullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
+            let content = isBullet ? String(trimmed.dropFirst(2)) : trimmed
+
+            if leadingSpaces >= 4 && isBullet {
+                elements.append(ParsedStructureElement(kind: .task, name: content))
+            } else if leadingSpaces >= 2 {
+                elements.append(ParsedStructureElement(kind: isBullet ? .milestone : .milestone, name: content))
+            }
+            // Top-level non-marker lines are ignored to avoid noise
+        }
+
+        return elements
+    }
+
+    /// Approve the current structure proposal and create Phase/Milestone/Task entities.
+    func approveStructureProposal() async {
+        guard let proposal = currentStructureProposal, let project = selectedProject else {
+            Log.ai.error("AIDevScreen approveStructureProposal: no current proposal or project")
+            return
+        }
+
+        let elements = parseStructureProposal(proposal)
+        guard !elements.isEmpty else {
+            errorMessage = "Could not parse any structure from the proposal"
+            showStructureProposalOverlay = false
+            return
+        }
+
+        Log.ai.info("AIDevScreen approving structure proposal: \(elements.count) elements")
+
+        do {
+            // Get existing phases to determine starting sort order
+            let existingPhases = try await phaseRepo.fetchAll(forProject: project.id)
+            var phaseSortOrder = existingPhases.count
+            var milestoneSortOrder = 0
+            var taskSortOrder = 0
+
+            var currentPhaseId: UUID?
+            var currentMilestoneId: UUID?
+            var phaseCount = 0
+            var milestoneCount = 0
+            var taskCount = 0
+
+            for element in elements {
+                switch element.kind {
+                case .phase:
+                    let phase = Phase(projectId: project.id, name: element.name, sortOrder: phaseSortOrder)
+                    try await phaseRepo.save(phase)
+                    currentPhaseId = phase.id
+                    currentMilestoneId = nil
+                    phaseSortOrder += 1
+                    milestoneSortOrder = 0
+                    taskSortOrder = 0
+                    phaseCount += 1
+
+                case .milestone:
+                    // If no phase exists yet, create a default one
+                    if currentPhaseId == nil {
+                        let phase = Phase(projectId: project.id, name: "Phase 1", sortOrder: phaseSortOrder)
+                        try await phaseRepo.save(phase)
+                        currentPhaseId = phase.id
+                        phaseSortOrder += 1
+                        phaseCount += 1
+                    }
+                    let milestone = Milestone(phaseId: currentPhaseId!, name: element.name, sortOrder: milestoneSortOrder)
+                    try await milestoneRepo.save(milestone)
+                    currentMilestoneId = milestone.id
+                    milestoneSortOrder += 1
+                    taskSortOrder = 0
+                    milestoneCount += 1
+
+                case .task:
+                    // If no milestone exists yet, create a default one
+                    if currentMilestoneId == nil {
+                        if currentPhaseId == nil {
+                            let phase = Phase(projectId: project.id, name: "Phase 1", sortOrder: phaseSortOrder)
+                            try await phaseRepo.save(phase)
+                            currentPhaseId = phase.id
+                            phaseSortOrder += 1
+                            phaseCount += 1
+                        }
+                        let milestone = Milestone(phaseId: currentPhaseId!, name: "Milestone 1", sortOrder: milestoneSortOrder)
+                        try await milestoneRepo.save(milestone)
+                        currentMilestoneId = milestone.id
+                        milestoneSortOrder += 1
+                        milestoneCount += 1
+                    }
+                    let task = PMTask(milestoneId: currentMilestoneId!, name: element.name, sortOrder: taskSortOrder)
+                    try await taskRepo.save(task)
+                    taskSortOrder += 1
+                    taskCount += 1
+                }
+            }
+
+            showStructureProposalOverlay = false
+            messages.append(DevScreenMessage(
+                role: "system",
+                content: "Structure approved: created \(phaseCount) phase(s), \(milestoneCount) milestone(s), \(taskCount) task(s)."
+            ))
+            Log.ai.info("AIDevScreen structure proposal approved: \(phaseCount) phases, \(milestoneCount) milestones, \(taskCount) tasks")
+        } catch {
+            errorMessage = "Failed to create structure: \(error.localizedDescription)"
+            Log.ai.error("AIDevScreen approve structure proposal failed: \(error)")
+        }
+    }
+
     /// Infer the deliverable type when the LLM omits it from the DOCUMENT_DRAFT tag.
     /// Falls back to the first in-progress or pending deliverable for this project.
     private func inferDeliverableType() -> DeliverableType? {
@@ -543,6 +891,7 @@ public final class AIDevScreenViewModel {
                     title: typeString
                 )
                 try? await deliverableRepo.save(deliverable)
+                syncManager?.trackChange(entityType: .deliverable, entityId: deliverable.id, changeType: .create)
                 deliverableStatuses[deliverableType] = .pending
                 Log.ai.info("AIDevScreen seeded pending deliverable: \(typeString)")
             }

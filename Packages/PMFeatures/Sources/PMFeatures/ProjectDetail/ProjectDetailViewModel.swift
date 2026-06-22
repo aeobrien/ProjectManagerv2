@@ -101,6 +101,11 @@ public final class ProjectDetailViewModel {
                 }
             }
 
+            // Reconcile milestone and phase statuses from child data
+            let reconciled = await reconcileStatuses(phases: phases, milestonesByPhase: msMap, tasksByMilestone: tMap)
+            phases = reconciled.phases
+            msMap = reconciled.milestonesByPhase
+
             milestonesByPhase = msMap
             tasksByMilestone = tMap
             subtasksByTask = sMap
@@ -210,6 +215,10 @@ public final class ProjectDetailViewModel {
         do {
             try await milestoneRepo.save(milestone)
             syncManager?.trackChange(entityType: .milestone, entityId: milestone.id, changeType: .update)
+
+            // Auto-propagate status to parent phase
+            await propagatePhaseStatus(for: milestone.phaseId)
+
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -280,6 +289,9 @@ public final class ProjectDetailViewModel {
                     }
                 }
             }
+
+            // Auto-propagate status to parent milestone
+            await propagateMilestoneStatus(for: task.milestoneId)
 
             await load()
         } catch { self.error = error.localizedDescription }
@@ -376,6 +388,123 @@ public final class ProjectDetailViewModel {
             syncManager?.trackChange(entityType: .subtask, entityId: subtask.id, changeType: .delete)
             await load()
         } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - Status Propagation
+
+    /// Compute and update milestone status based on its tasks.
+    /// - All tasks completed → milestone completed
+    /// - Any task in-progress/blocked/waiting → milestone in-progress
+    /// - All tasks not-started → milestone not-started
+    private func propagateMilestoneStatus(for milestoneId: UUID) async {
+        guard var milestone = try? await milestoneRepo.fetch(id: milestoneId) else { return }
+        let tasks = (try? await taskRepo.fetchAll(forMilestone: milestoneId)) ?? []
+        guard !tasks.isEmpty else { return }
+
+        let newStatus: ItemStatus
+        if tasks.allSatisfy({ $0.status == .completed }) {
+            newStatus = .completed
+        } else if tasks.contains(where: { $0.status != .notStarted }) {
+            newStatus = .inProgress
+        } else {
+            newStatus = .notStarted
+        }
+
+        if milestone.status != newStatus {
+            milestone.status = newStatus
+            try? await milestoneRepo.save(milestone)
+            syncManager?.trackChange(entityType: .milestone, entityId: milestoneId, changeType: .update)
+
+            // Cascade to parent phase
+            await propagatePhaseStatus(for: milestone.phaseId)
+        }
+    }
+
+    /// Compute and update phase status based on its milestones.
+    /// - All milestones completed → phase completed
+    /// - Any milestone in-progress/blocked/waiting/completed → phase in-progress
+    /// - All milestones not-started → phase not-started
+    private func propagatePhaseStatus(for phaseId: UUID) async {
+        guard var phase = try? await phaseRepo.fetch(id: phaseId) else { return }
+        let milestones = (try? await milestoneRepo.fetchAll(forPhase: phaseId)) ?? []
+        guard !milestones.isEmpty else { return }
+
+        let newStatus: PhaseStatus
+        if milestones.allSatisfy({ $0.status == .completed }) {
+            newStatus = .completed
+        } else if milestones.contains(where: { $0.status != .notStarted }) {
+            newStatus = .inProgress
+        } else {
+            newStatus = .notStarted
+        }
+
+        if phase.status != newStatus {
+            phase.status = newStatus
+            try? await phaseRepo.save(phase)
+            syncManager?.trackChange(entityType: .phase, entityId: phaseId, changeType: .update)
+        }
+    }
+
+    // MARK: - Status Reconciliation
+
+    /// On load, reconcile milestone/phase statuses from their children.
+    /// Fixes stale statuses from AI actions, sync, or pre-propagation data.
+    private func reconcileStatuses(
+        phases: [Phase],
+        milestonesByPhase: [UUID: [Milestone]],
+        tasksByMilestone: [UUID: [PMTask]]
+    ) async -> (phases: [Phase], milestonesByPhase: [UUID: [Milestone]]) {
+        var updatedPhases = phases
+        var updatedMilestones = milestonesByPhase
+
+        for phaseIdx in updatedPhases.indices {
+            let phase = updatedPhases[phaseIdx]
+            guard var milestones = updatedMilestones[phase.id], !milestones.isEmpty else { continue }
+
+            // Reconcile each milestone from its tasks
+            for msIdx in milestones.indices {
+                let milestone = milestones[msIdx]
+                let tasks = tasksByMilestone[milestone.id] ?? []
+                guard !tasks.isEmpty else { continue }
+
+                let correctStatus: ItemStatus
+                if tasks.allSatisfy({ $0.status == .completed }) {
+                    correctStatus = .completed
+                } else if tasks.contains(where: { $0.status != .notStarted }) {
+                    correctStatus = .inProgress
+                } else {
+                    correctStatus = .notStarted
+                }
+
+                if milestone.status != correctStatus {
+                    milestones[msIdx].status = correctStatus
+                    try? await milestoneRepo.save(milestones[msIdx])
+                    syncManager?.trackChange(entityType: .milestone, entityId: milestone.id, changeType: .update)
+                    Log.ui.debug("Reconciled milestone '\(milestone.name)' status: \(milestone.status.rawValue) → \(correctStatus.rawValue)")
+                }
+            }
+
+            updatedMilestones[phase.id] = milestones
+
+            // Reconcile phase from its milestones
+            let correctPhaseStatus: PhaseStatus
+            if milestones.allSatisfy({ $0.status == .completed }) {
+                correctPhaseStatus = .completed
+            } else if milestones.contains(where: { $0.status != .notStarted }) {
+                correctPhaseStatus = .inProgress
+            } else {
+                correctPhaseStatus = .notStarted
+            }
+
+            if phase.status != correctPhaseStatus {
+                updatedPhases[phaseIdx].status = correctPhaseStatus
+                try? await phaseRepo.save(updatedPhases[phaseIdx])
+                syncManager?.trackChange(entityType: .phase, entityId: phase.id, changeType: .update)
+                Log.ui.debug("Reconciled phase '\(phase.name)' status: \(phase.status.rawValue) → \(correctPhaseStatus.rawValue)")
+            }
+        }
+
+        return (updatedPhases, updatedMilestones)
     }
 
     // MARK: - Dependencies

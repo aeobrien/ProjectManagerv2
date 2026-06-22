@@ -7,12 +7,18 @@ import PMServices
 public struct QuickCaptureView: View {
     @Bindable var viewModel: QuickCaptureViewModel
     var voiceManager: VoiceInputManager
+    /// When true, the dismiss X button is hidden (e.g. when embedded in a TabView).
+    var isEmbedded: Bool = false
     @State private var showVoiceInput = false
     @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @FocusState private var isInputFocused: Bool
+    #endif
 
-    public init(viewModel: QuickCaptureViewModel, voiceManager: VoiceInputManager) {
+    public init(viewModel: QuickCaptureViewModel, voiceManager: VoiceInputManager, isEmbedded: Bool = false) {
         self.viewModel = viewModel
         self.voiceManager = voiceManager
+        self.isEmbedded = isEmbedded
     }
 
     public var body: some View {
@@ -24,13 +30,15 @@ public struct QuickCaptureView: View {
                 Text("Quick Capture")
                     .font(.headline)
                 Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                if !isEmbedded {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
             // Input mode toggle
@@ -64,7 +72,12 @@ public struct QuickCaptureView: View {
                     .frame(minHeight: 80)
                     .scrollContentBackground(.hidden)
                     .padding(8)
+                    #if os(iOS)
+                    .focused($isInputFocused)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator)))
+                    #else
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    #endif
             }
 
             // Optional title
@@ -75,7 +88,11 @@ public struct QuickCaptureView: View {
                 TextField("Auto-generated from description", text: $viewModel.title)
                     .textFieldStyle(.plain)
                     .padding(8)
+                    #if os(iOS)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator)))
+                    #else
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    #endif
             }
 
             // Category picker
@@ -91,6 +108,7 @@ public struct QuickCaptureView: View {
                             Text(cat.name).tag(Optional(cat.id))
                         }
                     }
+                    .pickerStyle(.menu)
                     .labelsHidden()
                     .frame(maxWidth: 200)
                 }
@@ -139,7 +157,14 @@ public struct QuickCaptureView: View {
             }
         }
         .padding()
-        #if os(macOS)
+        #if os(iOS)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isInputFocused = false }
+            }
+        }
+        #else
         .frame(width: 400)
         #endif
         .sheet(isPresented: $viewModel.showCodebaseSheet) {

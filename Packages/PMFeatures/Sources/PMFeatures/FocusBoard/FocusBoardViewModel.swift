@@ -27,8 +27,10 @@ public final class FocusBoardViewModel {
     /// Per-project last check-in record for use by CheckInView.
     public private(set) var lastCheckInByProject: [UUID: CheckInRecord] = [:]
 
-    /// Per-project toggle to show all tasks (bypassing curation).
+    /// Per-project toggle to show all tasks (bypassing curation) in To Do column.
     public var showAllTasks: Set<UUID> = []
+    /// Per-project toggle to show all done tasks.
+    public var showAllDone: Set<UUID> = []
 
     /// Session-based effort type filter (nil = show all).
     public var effortTypeFilter: EffortType? = nil
@@ -198,9 +200,22 @@ public final class FocusBoardViewModel {
             tasks = tasks.filter { $0.effortType == filter }
         }
 
-        // Curate unless "show all" is toggled for this project
+        // Sort by deadline (soonest first), then priority, then sort order
+        tasks.sort { a, b in
+            // Deadline tasks come before non-deadline tasks
+            switch (a.deadline, b.deadline) {
+            case let (ad?, bd?): if ad != bd { return ad < bd }
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): break
+            }
+            if a.priority != b.priority { return a.priority.sortValue < b.priority.sortValue }
+            return a.sortOrder < b.sortOrder
+        }
+
+        // Show all if toggled for this project
         if showAllTasks.contains(projectId) {
-            return tasks.sorted { $0.sortOrder < $1.sortOrder }
+            return tasks
         }
 
         return FocusManager.curateVisibleTasks(tasks: tasks, maxVisible: maxVisibleTasks)
@@ -235,7 +250,35 @@ public final class FocusBoardViewModel {
             done = Array(done.prefix(doneMaxItems))
         }
 
+        // Limit visible done tasks unless show-all is toggled
+        if !showAllDone.contains(projectId) && done.count > maxVisibleTasks {
+            done = Array(done.prefix(maxVisibleTasks))
+        }
+
         return done
+    }
+
+    /// Total done task count for a project (before visibility limit).
+    public func totalDoneCount(for projectId: UUID) -> Int {
+        let all = tasksByProject[projectId] ?? []
+        let now = Date()
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -doneRetentionDays, to: now) ?? now
+        return all.filter { $0.kanbanColumn == .done }
+            .filter { task in
+                guard let completedAt = task.completedAt else { return true }
+                return completedAt >= cutoffDate
+            }
+            .prefix(doneMaxItems)
+            .count
+    }
+
+    /// Toggle show-all for done column.
+    public func toggleShowAllDone(for projectId: UUID) {
+        if showAllDone.contains(projectId) {
+            showAllDone.remove(projectId)
+        } else {
+            showAllDone.insert(projectId)
+        }
     }
 
     /// Total task count for a project's ToDo column (before curation).

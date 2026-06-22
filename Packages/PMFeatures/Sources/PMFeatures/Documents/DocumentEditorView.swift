@@ -86,6 +86,7 @@ public struct DocumentEditorView: View {
                 .font(.title3)
                 .fontWeight(.semibold)
 
+            #if os(macOS)
             Picker("Type", selection: $typeFilter) {
                 Text("All").tag(DocumentType?.none)
                 Text("Vision").tag(Optional(DocumentType.visionStatement))
@@ -94,7 +95,6 @@ public struct DocumentEditorView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            #if os(macOS)
             .frame(maxWidth: 250)
             #endif
 

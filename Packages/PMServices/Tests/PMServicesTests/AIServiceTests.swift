@@ -382,17 +382,17 @@ struct ActionParserTests {
         #expect(!result.naturalLanguage.contains("[ACTION"))
     }
 
-    @Test("Parse UPDATE_NOTES")
+    @Test("Parse UPDATE_NOTES backward compat")
     func parseUpdateNotes() {
         let id = UUID()
         let response = "[ACTION: UPDATE_NOTES] projectId: \(id) notes: Updated progress notes [/ACTION]"
         let result = parser.parse(response)
         #expect(result.actions.count == 1)
-        if case .updateNotes(let projectId, let notes) = result.actions.first {
+        if case .updateProject(let projectId, let fields) = result.actions.first {
             #expect(projectId == id)
-            #expect(notes.contains("Updated progress"))
+            #expect(fields["notes"]?.contains("Updated progress") == true)
         } else {
-            #expect(Bool(false), "Expected updateNotes action")
+            #expect(Bool(false), "Expected updateProject action from UPDATE_NOTES")
         }
     }
 
@@ -439,12 +439,12 @@ struct ActionParserTests {
         let response = "[ACTION: CREATE_MILESTONE] phaseId: \(id) name: Beta Release [/ACTION]"
         let result = parser.parse(response)
         #expect(result.actions.count == 1)
-        if case .createMilestone(let phaseId, let name) = result.actions.first {
-            #expect(phaseId == id)
-            #expect(name.contains("Beta Release"))
-        } else {
+        guard case .createMilestone(let phaseId, let name, _) = result.actions[0] else {
             #expect(Bool(false), "Expected createMilestone action")
+            return
         }
+        #expect(phaseId == id)
+        #expect(name.contains("Beta Release"))
     }
 
     @Test("Parse CREATE_TASK")
@@ -453,14 +453,14 @@ struct ActionParserTests {
         let response = "[ACTION: CREATE_TASK] milestoneId: \(id) name: Design mockups priority: high effortType: creative [/ACTION]"
         let result = parser.parse(response)
         #expect(result.actions.count == 1)
-        if case .createTask(let msId, let name, let priority, let effort) = result.actions.first {
-            #expect(msId == id)
-            #expect(name.contains("Design mockups"))
-            #expect(priority == .high)
-            #expect(effort == .creative)
-        } else {
+        guard case .createTask(let msId, let name, let priority, let effort, _) = result.actions[0] else {
             #expect(Bool(false), "Expected createTask action")
+            return
         }
+        #expect(msId == id)
+        #expect(name.contains("Design mockups"))
+        #expect(priority == .high)
+        #expect(effort == .creative)
     }
 
     @Test("Parse multiple actions")

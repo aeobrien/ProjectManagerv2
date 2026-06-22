@@ -37,6 +37,18 @@ public extension ItemStatus {
     }
 }
 
+// MARK: - Phase Status Colours
+
+public extension PhaseStatus {
+    var color: Color {
+        switch self {
+        case .notStarted: .secondary
+        case .inProgress: .blue
+        case .completed: .green
+        }
+    }
+}
+
 // MARK: - Lifecycle State Colours
 
 public extension LifecycleState {
