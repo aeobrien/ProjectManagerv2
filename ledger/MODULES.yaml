@@ -48,13 +48,13 @@ modules:
     project: ProjectManagerV2
     subsystem: CloudKit Sync
     name: CloudKit sync engine
-    capability: Tracks local entity changes, pushes them to CloudKit, pulls remote updates back, and resolves simple conflicts.
+    capability: Tracks local entity changes, runs push and pull sync cycles against CloudKit, and applies timestamp-based conflict handling for remote updates.
     status: partial
-    approach: Uses a SyncEngine actor with a SQLite-backed change queue, CloudKit backend, serialized payload provider, and timestamp-based conflict resolver.
+    approach: Uses a SyncEngine actor with a SQLite-backed change queue, CloudKit backend, serialized payload provider, timestamp-based conflict resolver, and a SyncManager that is wired into the macOS and iOS app shells for periodic sync and change tracking.
     tech: [Swift, CloudKit, GRDB, UserDefaults]
     io: { in: "Tracked entity changes and remote CloudKit deltas", out: "Synced remote records, applied local updates, persisted sync tokens" }
     code_refs: ["Packages/PMData/Sources/PMData/Sync/*.swift", "Packages/PMFeatures/Sources/PMFeatures/Sync/SyncManager.swift", "ProjectManager/Sources/ContentView.swift", "ProjectManageriOS/Sources/iOSContentView.swift"]
-    known_gaps: ["ledger/PROJECT.md still lists real-world multi-device sync as an open question.", "Manual merge conflicts are logged and skipped rather than resolved in-product."]
+    known_gaps: ["ledger/PROJECT.md still lists real-world multi-device sync as an open question, so the integrated cross-device flow should be treated as only partially verified.", "Manual merge conflicts are logged and skipped rather than resolved in-product."]
     match_keywords: [cloudkit sync, offline sync, conflict resolution, change queue, bidirectional sync]
 
   - id: project-manager-v2.design-system.shared-ui-kit
