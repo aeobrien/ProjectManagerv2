@@ -1,0 +1,357 @@
+project_shape:
+  scale: sprawling
+  has_subsystem_layer: true
+  expected_modules: "20-30"
+  kind: product
+
+modules:
+  - id: project-manager-v2.domain-models.domain-model-and-rules
+    project: ProjectManagerV2
+    subsystem: Domain Models
+    name: Domain model and rules
+    capability: Models projects, hierarchy items, sessions, and the core business rules around focus, validation, and session state.
+    status: mature
+    approach: Uses Swift value types, enums, computed extensions, and pure rule helpers like FocusManager and SessionStateMachine inside PMDomain.
+    tech: [Swift, Foundation]
+    io: { in: "Repository records and UI/service inputs", out: "Typed entities, enums, and business-rule decisions" }
+    code_refs: ["Packages/PMDomain/Sources/PMDomain/Entities/**", "Packages/PMDomain/Sources/PMDomain/Enums/**", "Packages/PMDomain/Sources/PMDomain/Logic/**", "Packages/PMDomain/Sources/PMDomain/Protocols/**"]
+    known_gaps: []
+    match_keywords: [domain model, workflow rules, focus management, session state machine, project hierarchy]
+
+  - id: project-manager-v2.data-persistence.sqlite-data-store
+    project: ProjectManagerV2
+    subsystem: Data Persistence
+    name: SQLite data store
+    capability: Persists the full project hierarchy, documents, conversations, sessions, and supporting records in a local SQLite database.
+    status: mature
+    approach: Wraps GRDB DatabaseQueue migrations plus per-entity SQLite repository implementations behind domain repository protocols.
+    tech: [Swift, GRDB, SQLite]
+    io: { in: "Domain entities and repository queries", out: "Stored rows, fetched entities, FTS-backed document search index" }
+    code_refs: ["Packages/PMData/Sources/PMData/DatabaseManager.swift", "Packages/PMData/Sources/PMData/Repositories/*.swift", "Packages/PMData/Sources/PMData/Records/*.swift"]
+    known_gaps: []
+    match_keywords: [sqlite repository, grdb persistence, local database, migrations, repository layer]
+
+  - id: project-manager-v2.data-export-import.data-portability
+    project: ProjectManagerV2
+    subsystem: Data Export/Import
+    name: Data portability
+    capability: Exports and re-imports complete project data snapshots including hierarchy, documents, conversations, sessions, and codebase metadata.
+    status: working
+    approach: Builds Codable JSON payloads from GRDB reads and merges imports by UUID back into the database.
+    tech: [Swift, GRDB, JSONEncoder, JSONDecoder]
+    io: { in: "Database state or exported JSON", out: "Portable JSON snapshots or merged database updates" }
+    code_refs: ["Packages/PMData/Sources/PMData/Export/DataExporter.swift", "Packages/PMData/Sources/PMData/Export/DataImporter.swift"]
+    known_gaps: ["Single-project export currently includes all dependencies rather than filtering them to the selected project's hierarchy."]
+    match_keywords: [data export, data import, backup restore, json snapshot, migration payload]
+
+  - id: project-manager-v2.cloudkit-sync.cloudkit-sync-engine
+    project: ProjectManagerV2
+    subsystem: CloudKit Sync
+    name: CloudKit sync engine
+    capability: Tracks local entity changes, runs push and pull sync cycles against CloudKit, and applies timestamp-based conflict handling for remote updates.
+    status: partial
+    approach: Uses a SyncEngine actor with a SQLite-backed change queue, CloudKit backend, serialized payload provider, timestamp-based conflict resolver, and a SyncManager that is wired into the macOS and iOS app shells for periodic sync and change tracking.
+    tech: [Swift, CloudKit, GRDB, UserDefaults]
+    io: { in: "Tracked entity changes and remote CloudKit deltas", out: "Synced remote records, applied local updates, persisted sync tokens" }
+    code_refs: ["Packages/PMData/Sources/PMData/Sync/*.swift", "Packages/PMFeatures/Sources/PMFeatures/Sync/SyncManager.swift", "ProjectManager/Sources/ContentView.swift", "ProjectManageriOS/Sources/iOSContentView.swift"]
+    known_gaps: ["ledger/PROJECT.md still lists real-world multi-device sync as an open question, so the integrated cross-device flow should be treated as only partially verified.", "Manual merge conflicts are logged and skipped rather than resolved in-product."]
+    match_keywords: [cloudkit sync, offline sync, conflict resolution, change queue, bidirectional sync]
+
+  - id: project-manager-v2.design-system.shared-ui-kit
+    project: ProjectManagerV2
+    subsystem: Design System
+    name: Shared UI kit
+    capability: Provides reusable layout primitives, visual tokens, task cards, markdown rendering, badges, and progress components across the app.
+    status: working
+    approach: Implements SwiftUI components and token files in a dedicated package consumed by feature modules.
+    tech: [SwiftUI, Swift]
+    io: { in: "Feature view state", out: "Reusable views, colours, icons, and formatted markdown" }
+    code_refs: ["Packages/PMDesignSystem/Sources/PMDesignSystem/Components/*.swift", "Packages/PMDesignSystem/Sources/PMDesignSystem/Tokens/*.swift"]
+    known_gaps: []
+    match_keywords: [design system, ui components, swiftui kit, badges, markdown renderer]
+
+  - id: project-manager-v2.project-browser.project-browser
+    project: ProjectManagerV2
+    subsystem: Project Browser
+    name: Project browser
+    capability: Lists projects, filters and searches them, and drives project selection and basic project CRUD flows.
+    status: working
+    approach: Uses SwiftUI browser views and a view model backed by project and category repositories.
+    tech: [SwiftUI, Swift, GRDB]
+    io: { in: "Project/category repository data and user filter input", out: "Browsable project lists and create/edit actions" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/ProjectBrowser/*.swift"]
+    known_gaps: []
+    match_keywords: [project browser, project list, filter search, project crud, navigation shell]
+
+  - id: project-manager-v2.hierarchy-management.project-hierarchy-editor
+    project: ProjectManagerV2
+    subsystem: Hierarchy Management
+    name: Project hierarchy editor
+    capability: Loads and edits a project's phases, milestones, tasks, subtasks, and dependencies with status reconciliation.
+    status: working
+    approach: Uses ProjectDetailViewModel to orchestrate repository CRUD, child loading, dependency lookups, retrospective triggers, sync tracking, and notification hooks.
+    tech: [SwiftUI, Swift, GRDB]
+    io: { in: "Selected project plus hierarchy mutations", out: "Expanded project detail state and persisted hierarchy changes" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/ProjectDetail/ProjectDetailView.swift", "Packages/PMFeatures/Sources/PMFeatures/ProjectDetail/ProjectDetailViewModel.swift"]
+    known_gaps: []
+    match_keywords: [task hierarchy, milestone editor, phase editor, dependency management, project detail]
+
+  - id: project-manager-v2.focus-board.focus-board-planner
+    project: ProjectManagerV2
+    subsystem: Focus Board
+    name: Focus board planner
+    capability: Curates focused work into Kanban columns with WIP-sensitive task selection, health signals, diversity checks, and reminder scheduling.
+    status: working
+    approach: Combines FocusManager rules with repository-backed task loading inside a SwiftUI view model and board views.
+    tech: [SwiftUI, Swift]
+    io: { in: "Focused projects, tasks, categories, and check-in history", out: "Curated board columns, urgency signals, diversity violations, and notification requests" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/FocusBoard/*.swift", "Packages/PMDomain/Sources/PMDomain/Logic/FocusManager.swift"]
+    known_gaps: []
+    match_keywords: [kanban board, work in progress limits, task curation, focus board, project health]
+
+  - id: project-manager-v2.roadmap-view.project-roadmap
+    project: ProjectManagerV2
+    subsystem: Roadmap View
+    name: Project roadmap
+    capability: Presents a single project's milestones, deadlines, and task progress as a timeline-oriented roadmap.
+    status: working
+    approach: Uses project-scoped roadmap view models over phase, milestone, task, and dependency repositories.
+    tech: [SwiftUI, Swift]
+    io: { in: "Project hierarchy and deadline data", out: "Per-project roadmap views and milestone/task progress summaries" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Roadmap/ProjectRoadmapView.swift", "Packages/PMFeatures/Sources/PMFeatures/Roadmap/ProjectRoadmapViewModel.swift", "Packages/PMFeatures/Sources/PMFeatures/ProjectDetail/RoadmapView.swift"]
+    known_gaps: []
+    match_keywords: [project roadmap, timeline view, milestone planning, dependency timeline, schedule view]
+
+  - id: project-manager-v2.quick-capture.quick-capture-intake
+    project: ProjectManagerV2
+    subsystem: Quick Capture
+    name: Quick capture intake
+    capability: Captures rough project ideas from text or dictated transcript and turns them into idea-state project stubs.
+    status: working
+    approach: Uses lightweight SwiftUI capture flows and a dedicated view model without invoking the AI pipeline.
+    tech: [SwiftUI, Swift]
+    io: { in: "Typed text or voice transcript", out: "Idea-state projects and resettable capture state" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/QuickCapture/*.swift"]
+    known_gaps: []
+    match_keywords: [quick capture, inbox capture, idea capture, lightweight intake, project stub]
+
+  - id: project-manager-v2.voice-input.on-device-transcription
+    project: ProjectManagerV2
+    subsystem: Voice Input
+    name: On-device transcription
+    capability: Records microphone audio, shows waveform levels, and transcribes speech locally for chat and quick capture flows.
+    status: working
+    approach: Uses AVAudioRecorder for capture and WhisperKit/CoreML models for prewarmed on-device transcription.
+    tech: [Swift, AVFoundation, WhisperKit]
+    io: { in: "Microphone audio", out: "Editable transcript text, waveform samples, recording/transcription state" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/VoiceInput/VoiceInputManager.swift", "Packages/PMFeatures/Sources/PMFeatures/VoiceInput/VoiceInputView.swift"]
+    known_gaps: []
+    match_keywords: [speech to text, whisper transcription, voice capture, on-device ASR, waveform]
+
+  - id: project-manager-v2.ai-core.legacy-conversation-and-actions
+    project: ProjectManagerV2
+    subsystem: AI Core
+    name: Legacy conversation and action pipeline
+    capability: Sends project-aware prompts to Anthropic or OpenAI, parses action blocks, and applies approved project mutations.
+    status: working
+    approach: Uses URLSession-backed LLMClient, ContextAssembler, regex ActionParser, PromptTemplateStore, and repository-driven ActionExecutor.
+    tech: [Swift, URLSession, Anthropic API, OpenAI API, UserDefaults]
+    io: { in: "Conversation history, project context, prompt templates, AI settings", out: "Model responses, parsed actions, confirmation bundles, executed mutations" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/AI/*.swift"]
+    known_gaps: ["Provider and model configuration are read from UserDefaults directly rather than from the protocol-oriented DI layer described in ledger/PROJECT.md."]
+    match_keywords: [llm client, tool calling, action parser, prompt templates, ai assistant]
+
+  - id: project-manager-v2.ai-core.ai-session-v2-pipeline
+    project: ProjectManagerV2
+    subsystem: AI Core
+    name: AI session v2 pipeline
+    capability: Runs longer-lived structured AI sessions for exploration, definition, planning, and execution-support modes with summarisation.
+    status: partial
+    approach: Uses ConversationManager, SessionLifecycleManager, V2ContextAssembler, PromptComposer, response signals, and auto-summarisation services over session repositories.
+    tech: [Swift, URLSession, Anthropic API, OpenAI API, GRDB]
+    io: { in: "Project data, portfolio data, session messages, mode config", out: "Session records, assistant responses, parsed actions, summaries, token metadata" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/AISystemV2/**/*.swift", "Packages/PMFeatures/Sources/PMFeatures/AIDevScreen/*.swift"]
+    known_gaps: ["ledger/PROJECT.md explicitly calls out open questions about AI System V2 stability and parity across modules 1-6."]
+    match_keywords: [agent session pipeline, multi-turn planning ai, session lifecycle, ai summaries, structured conversation]
+
+  - id: project-manager-v2.chat-ui.ai-chat-workspace
+    project: ProjectManagerV2
+    subsystem: Chat UI
+    name: AI chat workspace
+    capability: Presents project-scoped chat, persisted conversation history, return briefings, and action confirmation UI for the legacy AI pipeline.
+    status: working
+    approach: Uses a SwiftUI chat surface and ChatViewModel over conversation repositories, ContextAssembler, and ActionExecutor.
+    tech: [SwiftUI, Swift]
+    io: { in: "User messages, selected project, saved conversations, AI responses", out: "Rendered chat threads, pending confirmations, persisted chat messages, return briefing cards" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Chat/*.swift"]
+    known_gaps: []
+    match_keywords: [chat ui, ai conversation, action confirmation, conversation history, return briefing]
+
+  - id: project-manager-v2.check-in-flow.check-in-coaching
+    project: ProjectManagerV2
+    subsystem: Check-In Flow
+    name: Check-in coaching
+    capability: Runs quick-log and full check-in conversations, records their results, and updates avoidance/deferment signals.
+    status: working
+    approach: Uses a feature flow manager and views backed by AI prompts, project context assembly, repository writes, and knowledge-base indexing.
+    tech: [SwiftUI, Swift, GRDB]
+    io: { in: "Project updates, task state, recent history, user reflection", out: "Check-in records, AI summaries, deferred-count updates, indexed history" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/CheckIn/*.swift"]
+    known_gaps: []
+    match_keywords: [project check-in, coaching flow, progress reflection, avoidance tracking, ai summary]
+
+  - id: project-manager-v2.project-onboarding.ai-onboarding-planner
+    project: ProjectManagerV2
+    subsystem: Project Onboarding
+    name: AI onboarding planner
+    capability: Converts a brain dump into follow-up questions, a proposed hierarchy, and generated onboarding documents for medium or complex projects.
+    status: working
+    approach: Uses a multi-turn OnboardingFlowManager with ContextAssembler, ActionParser-based structure extraction, direct repository creation, and document generation calls.
+    tech: [SwiftUI, Swift, Anthropic API, OpenAI API]
+    io: { in: "Brain dump text, optional repo URL, onboarding conversation turns", out: "Proposed phases/milestones/tasks, created project hierarchy, generated vision and technical brief documents" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Onboarding/*.swift"]
+    known_gaps: ["docs/AI-System-Overview.md notes that category and definition-of-done are still manual during onboarding.", "Structure actions are parsed for proposal only and then recreated via direct repo writes rather than flowing through ActionExecutor."]
+    match_keywords: [ai onboarding, project scaffolding, planning conversation, hierarchy proposal, document generation]
+
+  - id: project-manager-v2.document-management.document-workspace
+    project: ProjectManagerV2
+    subsystem: Document Management
+    name: Document workspace
+    capability: Edits project documents, snapshots version history, previews markdown, exports markdown files, and reindexes document content into the knowledge base.
+    status: working
+    approach: Uses a SwiftUI editor/view model over document and document-version repositories with optional knowledge-base indexing and sync hooks.
+    tech: [SwiftUI, Swift, GRDB]
+    io: { in: "Document selections and edits", out: "Saved documents, document-version snapshots, markdown exports, refreshed KB entries" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Documents/*.swift", "Packages/PMData/Sources/PMData/Repositories/SQLiteDocumentRepository.swift", "Packages/PMData/Sources/PMData/Repositories/SQLiteDocumentVersionRepository.swift"]
+    known_gaps: []
+    match_keywords: [markdown editor, document versioning, knowledge base indexing, docs workspace, markdown export]
+
+  - id: project-manager-v2.retrospective-flow.retrospective-coaching
+    project: ProjectManagerV2
+    subsystem: Retrospective Flow
+    name: Retrospective coaching
+    capability: Detects completed phases, prompts for reflection, runs AI retrospectives, and stores the resulting notes back onto the phase.
+    status: working
+    approach: Uses RetrospectiveFlowManager to watch phase completion, gather context, call the LLM, and persist combined user plus AI notes.
+    tech: [SwiftUI, Swift, Anthropic API, OpenAI API]
+    io: { in: "Completed phases and reflection text", out: "Retrospective conversations, saved phase notes, optional phase-completion notifications, return briefings" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Retrospective/*.swift"]
+    known_gaps: ["docs/AI-System-Overview.md says retrospective prompts include action-block documentation even though the flow never parses or executes actions.", "Return briefing generation is duplicated here and in ChatViewModel."]
+    match_keywords: [retrospective flow, phase reflection, project debrief, ai retrospective, return briefing]
+
+  - id: project-manager-v2.knowledge-base-rag.project-knowledge-base
+    project: ProjectManagerV2
+    subsystem: Knowledge Base (RAG)
+    name: Project knowledge base
+    capability: Chunks and embeds project documents, check-ins, notes, and codebase content so AI flows can retrieve relevant history.
+    status: working
+    approach: Uses an embedding service over Apple's NaturalLanguage contextual embeddings plus a GRDB-backed vector store and brute-force cosine similarity search.
+    tech: [Swift, NaturalLanguage, GRDB]
+    io: { in: "Project text sources and retrieval queries", out: "Stored embeddings, retrieval result lists, prompt-ready relevant context blocks" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/KnowledgeBase/*.swift", "Packages/PMServices/Sources/PMServices/Codebase/CodebaseIndexer.swift"]
+    known_gaps: []
+    match_keywords: [rag, embeddings, semantic search, vector store, retrieval augmented generation]
+
+  - id: project-manager-v2.ios-app.mobile-shell-and-widget
+    project: ProjectManagerV2
+    subsystem: iOS App
+    name: Mobile shell and widget
+    capability: Hosts the iOS tabbed application, deep links, project-detail navigation, and a quick-capture widget backed by shared app-group state.
+    status: working
+    approach: Uses a separate iOS SwiftUI app entry, mirrored service wiring, deep-link routing, and a WidgetKit extension that reads UserDefaults from an app group.
+    tech: [SwiftUI, WidgetKit, UserDefaults, UserNotifications]
+    io: { in: "Shared app state, deep-link URLs, app-group counters", out: "iOS tab navigation, detail screens, widget timelines, quick-capture entry points" }
+    code_refs: ["ProjectManageriOS/Sources/ProjectManageriOSApp.swift", "ProjectManageriOS/Sources/iOSContentView.swift", "ProjectManageriOS/Sources/Widget/QuickCaptureWidget.swift"]
+    known_gaps: ["The widget reads summary data from shared UserDefaults rather than querying the live database directly."]
+    match_keywords: [ios app, swiftui tabs, widgetkit, deep link, mobile shell]
+
+  - id: project-manager-v2.ios-notifications.notification-orchestrator
+    project: ProjectManagerV2
+    subsystem: iOS Notifications
+    name: Notification orchestrator
+    capability: Schedules reminders for deadlines, phase completions, and check-ins with fatigue-aware throttling and snoozing.
+    status: working
+    approach: Uses a NotificationManager plus a UNUserNotificationCenter delivery adapter and internal atomic state for snooze and daily scheduling limits.
+    tech: [Swift, UserNotifications]
+    io: { in: "Notification requests from focus, hierarchy, and retrospective flows", out: "Scheduled local notifications, snooze state, daily-send bookkeeping" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/Notifications/*.swift"]
+    known_gaps: []
+    match_keywords: [local notifications, reminder scheduler, snooze, fatigue prevention, task reminders]
+
+  - id: project-manager-v2.life-planner-export.external-planner-export
+    project: ProjectManagerV2
+    subsystem: Life Planner Export
+    name: External planner export
+    capability: Builds focused-project export payloads and sends them to an external planner endpoint or a JSON file on a debounced schedule.
+    status: working
+    approach: Uses an ExportService actor with switchable API or file backends, payload builders, and repository-backed data providers.
+    tech: [Swift, URLSession, JSONEncoder]
+    io: { in: "Focused project/task data and export settings", out: "HTTP POST requests or JSON files plus export status tracking" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/LifePlannerExport/*.swift"]
+    known_gaps: ["The current source tree exposes API and JSON-file backends only; there is no first-party MySQL backend implementation in these files."]
+    match_keywords: [external export, planner sync, webhook export, json export, debounced sync]
+
+  - id: project-manager-v2.integration-api.local-rest-api
+    project: ProjectManagerV2
+    subsystem: Integration API
+    name: Local REST API
+    capability: Exposes local HTTP endpoints for reading projects and tasks and mutating selected tasks and documents with optional bearer authentication.
+    status: working
+    approach: Uses a lightweight in-process HTTP server, a path router, repository-backed handlers, and an in-memory audit log for writes.
+    tech: [Swift, HTTP server, URLSession]
+    io: { in: "HTTP requests with path params, headers, and JSON bodies", out: "JSON responses, task/document mutations, audit log entries" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/IntegrationAPI/*.swift"]
+    known_gaps: ["The implemented route set is intentionally narrow and covers projects, tasks, and documents rather than the full domain model."]
+    match_keywords: [local api, rest api, project automation, task endpoint, embedded http server]
+
+  - id: project-manager-v2.estimate-calibration.estimate-analytics
+    project: ProjectManagerV2
+    subsystem: Estimate Calibration
+    name: Estimate analytics
+    capability: Computes estimate accuracy, effort-type patterns, deferral summaries, and neutral project analytics for reflection rather than gamification.
+    status: working
+    approach: Uses pure analytics structs over completed task history and surfaces the results in dedicated feature view models.
+    tech: [Swift, Foundation]
+    io: { in: "Completed task histories with estimates and actuals", out: "Accuracy ratios, suggested multipliers, trends, and project summary stats" }
+    code_refs: ["Packages/PMServices/Sources/PMServices/Analytics/EstimateTracker.swift", "Packages/PMFeatures/Sources/PMFeatures/Analytics/*.swift"]
+    known_gaps: []
+    match_keywords: [estimate calibration, analytics, accuracy tracking, effort trends, task deferral metrics]
+
+  - id: project-manager-v2.ai-project-reviews.portfolio-review
+    project: ProjectManagerV2
+    subsystem: AI Project Reviews
+    name: Portfolio review
+    capability: Reviews the whole focused portfolio for stalls, blocked work, waiting buildup, and deferral patterns, then asks the AI for cross-project recommendations.
+    status: working
+    approach: Detects patterns client-side across focused, queued, and paused projects and then sends the summary through the review prompt flow.
+    tech: [SwiftUI, Swift, Anthropic API, OpenAI API]
+    io: { in: "Portfolio task/check-in state and detected patterns", out: "Advisory AI review messages and cross-project pattern lists" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Reviews/*.swift"]
+    known_gaps: ["docs/AI-System-Overview.md notes that review prompts include action-block documentation even though ProjectReviewManager never parses or executes returned actions."]
+    match_keywords: [portfolio review, cross-project analysis, stall detection, blocked work review, focus board review]
+
+  - id: project-manager-v2.cross-project-roadmap.portfolio-roadmap
+    project: ProjectManagerV2
+    subsystem: Cross-Project Roadmap
+    name: Portfolio roadmap
+    capability: Aggregates milestones from all focused projects into a cross-project deadline and progress view.
+    status: working
+    approach: Loads focused projects and rolls up milestone/task counts into sortable CrossProjectMilestone models for SwiftUI presentation.
+    tech: [SwiftUI, Swift]
+    io: { in: "Focused projects and milestone/task data", out: "Aggregated milestone timeline, overdue lists, and per-project roadmap groupings" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/Roadmap/CrossProjectRoadmapView.swift", "Packages/PMFeatures/Sources/PMFeatures/Roadmap/CrossProjectRoadmapViewModel.swift"]
+    known_gaps: []
+    match_keywords: [portfolio roadmap, cross-project timeline, milestone aggregation, deadline dashboard, roadmap rollup]
+
+  - id: project-manager-v2.adversarial-review.external-critique-pipeline
+    project: ProjectManagerV2
+    subsystem: Adversarial Review
+    name: External critique pipeline
+    capability: Packages project documents for outside-model critique, imports critique payloads, and synthesises revisions back into the document workspace.
+    status: working
+    approach: Uses a ReviewExporter plus AdversarialReviewManager to export JSON, ingest critique JSON, and run a separate synthesis conversation over the imported critiques.
+    tech: [SwiftUI, Swift, JSONEncoder, JSONDecoder, Anthropic API, OpenAI API]
+    io: { in: "Project documents, exported review package, imported critique JSON, follow-up prompts", out: "External review package, critique objects, synthesis responses, revised documents" }
+    code_refs: ["Packages/PMFeatures/Sources/PMFeatures/AdversarialReview/*.swift", "Packages/PMServices/Sources/PMServices/AdversarialReview/ReviewExporter.swift"]
+    known_gaps: ["docs/AI-System-Overview.md says this flow bypasses the shared behavioural contract, ContextAssembler, and PromptTemplateStore used elsewhere.", "External critique collection is still a manual copy/paste step."]
+    match_keywords: [adversarial review, external critique, review package, critique synthesis, document revision]
