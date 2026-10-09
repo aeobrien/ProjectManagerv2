@@ -1,0 +1,213 @@
+import SwiftUI
+import PMDomain
+import PMDesignSystem
+import PMServices
+
+/// Lightweight quick capture sheet for creating Idea-state project stubs.
+public struct QuickCaptureView: View {
+    @Bindable var viewModel: QuickCaptureViewModel
+    var voiceManager: VoiceInputManager
+    /// When true, the dismiss X button is hidden (e.g. when embedded in a TabView).
+    var isEmbedded: Bool = false
+    @State private var showVoiceInput = false
+    @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @FocusState private var isInputFocused: Bool
+    #endif
+
+    public init(viewModel: QuickCaptureViewModel, voiceManager: VoiceInputManager, isEmbedded: Bool = false) {
+        self.viewModel = viewModel
+        self.voiceManager = voiceManager
+        self.isEmbedded = isEmbedded
+    }
+
+    public var body: some View {
+        VStack(spacing: 16) {
+            // Header
+            HStack {
+                Image(systemName: "bolt.fill")
+                    .foregroundStyle(.yellow)
+                Text("Quick Capture")
+                    .font(.headline)
+                Spacer()
+                if !isEmbedded {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            // Input mode toggle
+            HStack {
+                Text("What's the idea?")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showVoiceInput.toggle()
+                    if !showVoiceInput {
+                        voiceManager.cancel()
+                    }
+                } label: {
+                    Image(systemName: showVoiceInput ? "keyboard" : "mic.fill")
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .help(showVoiceInput ? "Switch to text input" : "Switch to voice input")
+            }
+
+            // Input area
+            if showVoiceInput {
+                VoiceInputView(manager: voiceManager) { transcript in
+                    viewModel.transcript = transcript
+                    showVoiceInput = false
+                }
+            } else {
+                TextEditor(text: $viewModel.transcript)
+                    .font(.body)
+                    .frame(minHeight: 80)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    #if os(iOS)
+                    .focused($isInputFocused)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator)))
+                    #else
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    #endif
+            }
+
+            // Optional title
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Title (optional)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Auto-generated from description", text: $viewModel.title)
+                    .textFieldStyle(.plain)
+                    .padding(8)
+                    #if os(iOS)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator)))
+                    #else
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    #endif
+            }
+
+            // Category picker
+            if !viewModel.categories.isEmpty {
+                HStack {
+                    Text("Category")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Category", selection: $viewModel.selectedCategoryId) {
+                        Text("Auto").tag(UUID?.none)
+                        ForEach(viewModel.categories) { cat in
+                            Text(cat.name).tag(Optional(cat.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                }
+            }
+
+            // Error
+            if let error = viewModel.error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            // Success
+            if viewModel.didSave {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Idea captured!")
+                        .font(.subheadline)
+                }
+            }
+
+            // Actions
+            HStack {
+                if viewModel.didSave {
+                    if viewModel.codebaseRepo != nil {
+                        Button("Attach Codebase") {
+                            viewModel.showCodebaseSheet = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Spacer()
+                    Button("Done") {
+                        viewModel.reset()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Spacer()
+                    Button("Save Idea") {
+                        Task { await viewModel.save() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!viewModel.canSave)
+                    .keyboardShortcut(.return, modifiers: .command)
+                }
+            }
+        }
+        .padding()
+        #if os(iOS)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isInputFocused = false }
+            }
+        }
+        #else
+        .frame(width: 400)
+        #endif
+        .sheet(isPresented: $viewModel.showCodebaseSheet) {
+            if let cbRepo = viewModel.codebaseRepo, let projectId = viewModel.lastSavedProjectId {
+                CodebaseAddSheet(projectId: projectId, codebaseRepo: cbRepo)
+            }
+        }
+        .task {
+            await viewModel.loadCategories()
+        }
+    }
+}
+
+// MARK: - Preview
+
+#Preview("Quick Capture") {
+    QuickCaptureView(
+        viewModel: QuickCaptureViewModel(
+            projectRepo: PreviewProjectRepo(),
+            categoryRepo: PreviewCategoryRepo()
+        ),
+        voiceManager: VoiceInputManager()
+    )
+}
+
+// Simple preview mocks
+private final class PreviewProjectRepo: ProjectRepositoryProtocol, @unchecked Sendable {
+    func fetchAll() async throws -> [Project] { [] }
+    func fetch(id: UUID) async throws -> Project? { nil }
+    func fetchByLifecycleState(_ state: LifecycleState) async throws -> [Project] { [] }
+    func fetchByCategory(_ categoryId: UUID) async throws -> [Project] { [] }
+    func fetchFocused() async throws -> [Project] { [] }
+    func save(_ project: Project) async throws {}
+    func delete(id: UUID) async throws {}
+    func search(query: String) async throws -> [Project] { [] }
+}
+
+private final class PreviewCategoryRepo: CategoryRepositoryProtocol, @unchecked Sendable {
+    func fetchAll() async throws -> [PMDomain.Category] {
+        [PMDomain.Category(name: "Software", isBuiltIn: true)]
+    }
+    func fetch(id: UUID) async throws -> PMDomain.Category? { nil }
+    func save(_ category: PMDomain.Category) async throws {}
+    func delete(id: UUID) async throws {}
+    func seedBuiltInCategories() async throws {}
+}
