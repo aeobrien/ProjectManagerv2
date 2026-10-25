@@ -1,0 +1,23 @@
+{
+  "capture_finished_at_utc": "2026-10-25T03:59:43Z",
+  "capture_started_at_utc": "2026-10-25T03:59:40Z",
+  "captured_at_utc": "2026-10-25T03:59:40Z",
+  "captured_byte_estimate": 2936568,
+  "captured_path_count": 339,
+  "consistency_retry_count": 0,
+  "excluded": [],
+  "github_hard_limit_bytes": 100000000,
+  "guardian_version": "2.0-sidecar",
+  "head_state": "symbolic",
+  "host": "aidans-laptop",
+  "racy_capture": false,
+  "repository_id": "ProjectManagerv2-da164697657d",
+  "schema_version": 1,
+  "snapshot_blob_threshold_bytes": 94371840,
+  "snapshot_consistency": "stable",
+  "source_branch": "main",
+  "source_head_oid": "0284142dc0c595b248acec9f40f174b4fcedb248",
+  "source_index_sha256": "c25b753fa65d10322ee59949094003bed3fdf36259e1dace179806825df19f25",
+  "source_path": "/Users/aidan/Dev/ProjectManagerv2",
+  "upstream_observed": "origin/main"
+}
