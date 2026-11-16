@@ -1,0 +1,351 @@
+import Foundation
+import PMDomain
+import PMUtilities
+import os
+
+/// Protocol for the remote sync backend, enabling testing without CloudKit.
+public protocol SyncBackendProtocol: Sendable {
+    /// Ensure the remote storage zone/container exists. Called once before the first push/pull.
+    func ensureZoneExists() async throws
+
+    /// Push a batch of changes to the remote.
+    func push(changes: [SyncChange], payloads: [UUID: Data]) async throws
+
+    /// Pull changes from remote since last sync.
+    func pull(since token: Data?) async throws -> (changes: [SyncChange], payloads: [UUID: Data], newToken: Data?)
+
+    /// Check if the user is authenticated for sync.
+    func isAuthenticated() async -> Bool
+}
+
+/// Protocol for the local change queue.
+public protocol SyncQueueProtocol: Sendable {
+    /// Enqueue a local change.
+    func enqueue(_ change: SyncChange) async throws
+
+    /// Get all pending (unsynced) changes.
+    func pendingChanges() async throws -> [SyncChange]
+
+    /// Mark changes as synced.
+    func markSynced(ids: [UUID]) async throws
+
+    /// Remove synced changes older than a date.
+    func purge(before date: Date) async throws
+
+    /// Count of pending changes.
+    func pendingCount() async throws -> Int
+}
+
+/// Manages bidirectional sync between local GRDB and CloudKit.
+public actor SyncEngine {
+    private let backend: SyncBackendProtocol
+    private let queue: SyncQueueProtocol
+    private let conflictResolver: ConflictResolver
+    private let dataProvider: SyncDataProviderProtocol?
+
+    private var syncState: SyncState
+    private var isSyncing = false
+    private var zoneReady = false
+    private var hasEnqueuedThisSession = false
+
+    /// Minimum interval between syncs (seconds).
+    public let minSyncInterval: TimeInterval
+
+    /// Conflict resolution threshold — if timestamps are within this many seconds, flag for manual merge.
+    public let conflictThresholdSeconds: TimeInterval
+
+    /// UserDefaults key for persisting the server change token.
+    private static let serverChangeTokenKey = "syncEngine.serverChangeToken"
+    private static let lastSyncDateKey = "syncEngine.lastSyncDate"
+
+    public init(
+        backend: SyncBackendProtocol,
+        queue: SyncQueueProtocol,
+        dataProvider: SyncDataProviderProtocol? = nil,
+        conflictResolver: ConflictResolver = ConflictResolver(),
+        syncState: SyncState = SyncState(),
+        minSyncInterval: TimeInterval = 30,
+        conflictThresholdSeconds: TimeInterval = 60
+    ) {
+        self.backend = backend
+        self.queue = queue
+        self.dataProvider = dataProvider
+        self.conflictResolver = conflictResolver
+        self.minSyncInterval = minSyncInterval
+        self.conflictThresholdSeconds = conflictThresholdSeconds
+
+        // Restore persisted sync state
+        var restored = syncState
+        let defaults = UserDefaults.standard
+        if let tokenData = defaults.data(forKey: Self.serverChangeTokenKey) {
+            restored.serverChangeToken = tokenData
+            Log.data.info("Restored server change token from previous session")
+        }
+        if let lastSync = defaults.object(forKey: Self.lastSyncDateKey) as? Date {
+            restored.lastSyncDate = lastSync
+        }
+        self.syncState = restored
+    }
+
+    /// Persist sync state to UserDefaults so it survives app restarts.
+    private func persistSyncState() {
+        let defaults = UserDefaults.standard
+        if let token = syncState.serverChangeToken {
+            defaults.set(token, forKey: Self.serverChangeTokenKey)
+        }
+        if let lastSync = syncState.lastSyncDate {
+            defaults.set(lastSync, forKey: Self.lastSyncDateKey)
+        }
+    }
+
+    // MARK: - Change Tracking
+
+    /// Record a local change for later sync.
+    public func trackChange(entityType: SyncEntityType, entityId: UUID, changeType: SyncChangeType) async throws {
+        let change = SyncChange(
+            entityType: entityType,
+            entityId: entityId,
+            changeType: changeType
+        )
+        try await queue.enqueue(change)
+        Log.data.info("Tracked \(changeType.rawValue) for \(entityType.rawValue) \(entityId)")
+    }
+
+    // MARK: - Sync
+
+    /// Perform a full sync cycle: push local changes, then pull remote changes.
+    public func sync() async throws {
+        guard !isSyncing else { return }
+
+        // Check minimum interval
+        if let lastSync = syncState.lastSyncDate {
+            let elapsed = Date().timeIntervalSince(lastSync)
+            guard elapsed >= minSyncInterval else { return }
+        }
+
+        guard await backend.isAuthenticated() else {
+            throw SyncError.notAuthenticated
+        }
+
+        isSyncing = true
+        defer { isSyncing = false }
+
+        // Ensure remote zone exists on first sync
+        if !zoneReady {
+            try await backend.ensureZoneExists()
+            zoneReady = true
+            Log.data.info("CloudKit zone ready")
+        }
+
+        // Push local changes
+        try await pushChanges()
+
+        // Pull remote changes
+        try await pullChanges()
+
+        syncState.lastSyncDate = Date()
+        syncState.pendingChangeCount = try await queue.pendingCount()
+
+        // Persist sync state (server change token) so incremental sync works across launches
+        persistSyncState()
+
+        // Purge old synced changes (older than 7 days)
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        try await queue.purge(before: cutoff)
+    }
+
+    /// Push pending local changes to the remote.
+    private func pushChanges() async throws {
+        let pending = try await queue.pendingChanges()
+        guard !pending.isEmpty else { return }
+
+        // Serialize entity data for each pending change
+        var payloads: [UUID: Data] = [:]
+        if let provider = dataProvider {
+            for change in pending where change.changeType != .delete {
+                if let data = try await provider.serialize(entityType: change.entityType, entityId: change.entityId) {
+                    payloads[change.entityId] = data
+                }
+            }
+        }
+
+        try await backend.push(changes: pending, payloads: payloads)
+
+        let ids = pending.map(\.id)
+        try await queue.markSynced(ids: ids)
+        Log.data.info("Pushed \(pending.count) changes (\(payloads.count) with payloads) to remote")
+    }
+
+    /// Pull remote changes and apply locally.
+    private func pullChanges() async throws {
+        let result = try await backend.pull(since: syncState.serverChangeToken)
+
+        if let newToken = result.newToken {
+            syncState.serverChangeToken = newToken
+        }
+
+        // Process each remote change
+        for change in result.changes {
+            // Check for conflicts with pending local changes
+            let pending = try await queue.pendingChanges()
+            let conflicting = pending.first {
+                $0.entityType == change.entityType && $0.entityId == change.entityId
+            }
+
+            if let local = conflicting {
+                let conflict = SyncConflict(
+                    entityType: change.entityType,
+                    entityId: change.entityId,
+                    localTimestamp: local.timestamp,
+                    remoteTimestamp: change.timestamp
+                )
+                let resolution = conflictResolver.resolve(conflict, threshold: conflictThresholdSeconds)
+                Log.data.info("Conflict on \(change.entityType.rawValue) \(change.entityId): \(resolution.rawValue)")
+
+                // Skip applying remote if we're keeping local
+                if resolution == .keepLocal {
+                    continue
+                }
+                // For manual merge, skip for now (document conflicts surface to UI)
+                if resolution == .manualMerge {
+                    Log.data.notice("Manual merge needed for \(change.entityType.rawValue) \(change.entityId)")
+                    continue
+                }
+            }
+
+            // Apply the remote change locally
+            if let provider = dataProvider {
+                switch change.changeType {
+                case .create, .update:
+                    if let payload = result.payloads[change.entityId] {
+                        do {
+                            try await provider.apply(entityType: change.entityType, entityId: change.entityId, data: payload)
+                        } catch {
+                            Log.data.error("Failed to apply remote \(change.entityType.rawValue) \(change.entityId): \(error)")
+                        }
+                    }
+                case .delete:
+                    do {
+                        try await provider.deleteEntity(entityType: change.entityType, entityId: change.entityId)
+                    } catch {
+                        Log.data.error("Failed to delete remote \(change.entityType.rawValue) \(change.entityId): \(error)")
+                    }
+                }
+            }
+        }
+
+        let count = result.changes.count
+        Log.data.info("Pulled \(count) changes from remote")
+    }
+
+    // MARK: - Initial Full Push
+
+    /// Enqueue all existing entities for sync. Only runs once — on the very first sync
+    /// when no server change token exists and the queue is empty.
+    public func enqueueAllExistingEntities() async throws {
+        // Only enqueue once per session
+        guard !hasEnqueuedThisSession else { return }
+        hasEnqueuedThisSession = true
+
+        guard let provider = dataProvider else {
+            Log.data.error("Cannot enqueue all entities: no data provider")
+            return
+        }
+
+        // Skip if we already have a server change token (we've synced before)
+        if syncState.serverChangeToken != nil {
+            Log.data.info("Skipping initial enqueue: server change token exists (already synced)")
+            return
+        }
+
+        let pending = try await queue.pendingCount()
+        if pending > 0 {
+            Log.data.info("Skipping initial enqueue: \(pending) changes already pending")
+            return
+        }
+
+        var total = 0
+        for entityType in SyncEntityType.allCases {
+            let ids = try await provider.allEntityIds(for: entityType)
+            for id in ids {
+                let change = SyncChange(
+                    entityType: entityType,
+                    entityId: id,
+                    changeType: .create
+                )
+                try await queue.enqueue(change)
+                total += 1
+            }
+        }
+        Log.data.info("Enqueued \(total) existing entities for initial sync")
+    }
+
+    /// Force re-enqueue all entities regardless of prior sync state.
+    /// Use when entities were created before sync tracking was in place.
+    public func forceReenqueueAll() async throws {
+        guard let provider = dataProvider else {
+            Log.data.error("Cannot force re-enqueue: no data provider")
+            return
+        }
+
+        var total = 0
+        for entityType in SyncEntityType.allCases {
+            let ids = try await provider.allEntityIds(for: entityType)
+            for id in ids {
+                let change = SyncChange(
+                    entityType: entityType,
+                    entityId: id,
+                    changeType: .create
+                )
+                try await queue.enqueue(change)
+                total += 1
+            }
+        }
+        Log.data.info("Force re-enqueued \(total) entities for full sync")
+    }
+
+    // MARK: - State
+
+    /// Get the current sync state.
+    public func currentState() -> SyncState {
+        syncState
+    }
+
+    /// Whether a sync is currently in progress.
+    public func isSyncInProgress() -> Bool {
+        isSyncing
+    }
+
+    /// Reset sync state (forces full re-sync).
+    public func resetState() {
+        syncState = SyncState()
+        hasEnqueuedThisSession = false
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.serverChangeTokenKey)
+        defaults.removeObject(forKey: Self.lastSyncDateKey)
+    }
+}
+
+// MARK: - Conflict Resolution
+
+/// Resolves sync conflicts between local and remote versions.
+public struct ConflictResolver: Sendable {
+    public init() {}
+
+    /// Resolve a conflict using the configured strategy.
+    public func resolve(_ conflict: SyncConflict, threshold: TimeInterval = 60) -> ConflictResolution {
+        let timeDiff = abs(conflict.localTimestamp.timeIntervalSince(conflict.remoteTimestamp))
+
+        // For document content with very close timestamps, suggest manual merge
+        if conflict.entityType == .document && timeDiff < threshold {
+            return .manualMerge
+        }
+
+        // Default: last write wins
+        if conflict.localTimestamp > conflict.remoteTimestamp {
+            return .keepLocal
+        } else {
+            return .keepRemote
+        }
+    }
+}
