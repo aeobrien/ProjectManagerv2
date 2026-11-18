@@ -1,0 +1,135 @@
+import Foundation
+import PMData
+import PMDomain
+import PMUtilities
+import os
+
+/// ViewModel for Quick Capture — creates Idea-state project stubs from text input.
+@Observable
+@MainActor
+public final class QuickCaptureViewModel {
+    // MARK: - State
+
+    public var transcript: String = ""
+    public var title: String = ""
+    public var selectedCategoryId: UUID?
+    public private(set) var categories: [PMDomain.Category] = []
+    public private(set) var isSaving = false
+    public private(set) var error: String?
+    public private(set) var didSave = false
+    private var autoResetTask: Task<Void, Never>?
+
+    // MARK: - Dependencies
+
+    private let projectRepo: ProjectRepositoryProtocol
+    private let categoryRepo: CategoryRepositoryProtocol
+
+    /// Optional sync manager for tracking changes.
+    public var syncManager: SyncManager?
+
+    /// Optional codebase repository for attaching codebases after project creation.
+    public var codebaseRepo: CodebaseRepositoryProtocol?
+
+    /// The ID of the last saved project, for attaching a codebase.
+    public private(set) var lastSavedProjectId: UUID?
+
+    /// Whether to show the codebase add sheet after saving.
+    public var showCodebaseSheet = false
+
+    // MARK: - Init
+
+    public init(projectRepo: ProjectRepositoryProtocol, categoryRepo: CategoryRepositoryProtocol) {
+        self.projectRepo = projectRepo
+        self.categoryRepo = categoryRepo
+    }
+
+    // MARK: - Loading
+
+    public func loadCategories() async {
+        do {
+            categories = try await categoryRepo.fetchAll()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    // MARK: - Save
+
+    /// Creates an Idea-state project from the current input.
+    public func save() async {
+        let effectiveTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !effectiveTranscript.isEmpty else {
+            error = "Please enter a description."
+            return
+        }
+
+        // Use first line of transcript as title if none provided
+        let projectName: String
+        if effectiveTitle.isEmpty {
+            projectName = String(effectiveTranscript.prefix(100))
+                .components(separatedBy: .newlines).first ?? effectiveTranscript
+        } else {
+            projectName = effectiveTitle
+        }
+
+        // Use first category if none selected
+        let categoryId = selectedCategoryId ?? categories.first?.id
+        guard let categoryId else {
+            error = "No categories available."
+            return
+        }
+
+        isSaving = true
+        do {
+            let project = Project(
+                name: projectName,
+                categoryId: categoryId,
+                lifecycleState: .idea,
+                quickCaptureTranscript: effectiveTranscript
+            )
+            try await projectRepo.save(project)
+            syncManager?.trackChange(entityType: .project, entityId: project.id, changeType: .create)
+            lastSavedProjectId = project.id
+            didSave = true
+            // Only auto-reset if no codebase attachment is available;
+            // otherwise let the user click "Attach Codebase" or "Done" manually.
+            if codebaseRepo == nil {
+                scheduleAutoReset()
+            }
+            Log.ui.info("Quick captured project '\(projectName)'")
+        } catch {
+            self.error = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    /// Resets the form for a new capture.
+    public func reset() {
+        autoResetTask?.cancel()
+        autoResetTask = nil
+        transcript = ""
+        title = ""
+        selectedCategoryId = nil
+        error = nil
+        didSave = false
+        lastSavedProjectId = nil
+        showCodebaseSheet = false
+    }
+
+    /// Schedules an automatic form reset after a 2-second success display.
+    private func scheduleAutoReset() {
+        autoResetTask?.cancel()
+        autoResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.reset()
+        }
+    }
+
+    /// Whether the save button should be enabled.
+    public var canSave: Bool {
+        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
+    }
+}
